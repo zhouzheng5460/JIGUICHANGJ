@@ -1,0 +1,1057 @@
+/**
+ * Tests for Share URL Encoding/Decoding utilities
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as pako from "pako";
+import LZString from "lz-string";
+import {
+  encodeLayout,
+  decodeLayout,
+  toMinimalLayout,
+  generateShareUrl,
+  getShareParam,
+  clearShareParam,
+  base64UrlEncode,
+  MAX_ENCODED_LENGTH,
+  MAX_DECOMPRESSED_BYTES,
+} from "$lib/utils/share";
+import {
+  createTestLayout,
+  createTestRack,
+  createTestDeviceType,
+  createTestDevice,
+} from "./factories";
+import { toInternalUnits } from "$lib/utils/position";
+import {
+  unreadableImportMessage,
+  INVALID_LAYOUT_FORMAT_MESSAGE,
+} from "$lib/utils/import-errors";
+import type { Layout } from "$lib/types";
+
+// pako 3.x exports a frozen, read-only ESM namespace, so vi.spyOn cannot
+// redefine its properties. Replace it with a spread copy whose properties are
+// writable, restoring spy support for the size-guard test below.
+vi.mock("pako", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("pako")>();
+  return { ...actual };
+});
+
+// =============================================================================
+// Test Helpers
+// =============================================================================
+
+/**
+ * Helper to assert encodeLayout returns a non-null string.
+ * Use this to safely get encoded values in tests.
+ */
+function requireEncoded(layout: Layout): string {
+  const encoded = encodeLayout(layout);
+  if (typeof encoded !== "string" || encoded.length === 0) {
+    throw new Error("encodeLayout returned null or empty string");
+  }
+  return encoded;
+}
+
+/**
+ * Helper to assert decodeLayout returns a non-null Layout.
+ * Use this to safely get decoded values in tests.
+ */
+function requireDecoded(encoded: string): Layout {
+  const { layout } = decodeLayout(encoded);
+  if (!layout) {
+    throw new Error("decodeLayout returned null layout");
+  }
+  return layout;
+}
+
+/**
+ * Creates a layout with devices for testing encoding/decoding.
+ */
+function createLayoutWithDevices(): Layout {
+  const deviceType = createTestDeviceType({
+    slug: "test-server",
+    u_height: 2,
+    category: "server",
+    model: "Test Server",
+  });
+
+  const device = createTestDevice({
+    device_type: "test-server",
+    position: 5,
+    face: "front",
+  });
+
+  return createTestLayout({
+    name: "Test Layout",
+    racks: [
+      createTestRack({
+        name: "Main Rack",
+        height: 42,
+        width: 19,
+        devices: [device],
+      }),
+    ],
+    device_types: [deviceType],
+  });
+}
+
+// =============================================================================
+// toMinimalLayout Tests
+// =============================================================================
+
+describe("toMinimalLayout", () => {
+  it("converts layout to minimal format", () => {
+    const layout = createLayoutWithDevices();
+    const minimal = toMinimalLayout(layout);
+
+    expect(minimal.v).toBe(layout.version);
+    expect(minimal.n).toBe(layout.name);
+    expect(minimal.rs[0].n).toBe(layout.racks[0].name);
+    expect(minimal.rs[0].h).toBe(layout.racks[0].height);
+    expect(minimal.rs[0].w).toBe(19);
+  });
+
+  it("normalizes rack width 10 to 10", () => {
+    const layout = createTestLayout({
+      racks: [createTestRack({ width: 10, devices: [] })],
+    });
+    const minimal = toMinimalLayout(layout);
+
+    expect(minimal.rs[0].w).toBe(10);
+  });
+
+  it("normalizes rack width 19 to 19", () => {
+    const layout = createTestLayout({
+      racks: [createTestRack({ width: 19, devices: [] })],
+    });
+    const minimal = toMinimalLayout(layout);
+
+    expect(minimal.rs[0].w).toBe(19);
+  });
+
+  it("normalizes non-standard rack width 21 to 19", () => {
+    const layout = createTestLayout({
+      // Test legacy/invalid width - cast via unknown for type safety
+      racks: [createTestRack({ width: 21 as unknown as 10 | 19, devices: [] })],
+    });
+    const minimal = toMinimalLayout(layout);
+
+    expect(minimal.rs[0].w).toBe(19);
+  });
+
+  it("normalizes non-standard rack width 23 to 19", () => {
+    const layout = createTestLayout({
+      // Test legacy/invalid width - cast via unknown for type safety
+      racks: [createTestRack({ width: 23 as unknown as 10 | 19, devices: [] })],
+    });
+    const minimal = toMinimalLayout(layout);
+
+    expect(minimal.rs[0].w).toBe(19);
+  });
+
+  it("only includes device types that are placed", () => {
+    const usedType = createTestDeviceType({ slug: "used-device" });
+    const unusedType = createTestDeviceType({ slug: "unused-device" });
+    const device = createTestDevice({ device_type: "used-device" });
+
+    const layout = createTestLayout({
+      racks: [createTestRack({ devices: [device] })],
+      device_types: [usedType, unusedType],
+    });
+
+    const minimal = toMinimalLayout(layout);
+
+    // Check used device is included
+    expect(minimal.dt.find((dt) => dt.s === "used-device")).toBeDefined();
+    // Check unused device is excluded
+    expect(minimal.dt.find((dt) => dt.s === "unused-device")).toBeUndefined();
+  });
+
+  it("converts device types with abbreviated keys", () => {
+    const deviceType = createTestDeviceType({
+      slug: "test-slug",
+      u_height: 2,
+      manufacturer: "Test Mfr",
+      model: "Test Model",
+      category: "server",
+    });
+    const device = createTestDevice({ device_type: "test-slug" });
+
+    const layout = createTestLayout({
+      racks: [createTestRack({ devices: [device] })],
+      device_types: [deviceType],
+    });
+
+    const minimal = toMinimalLayout(layout);
+    const dt = minimal.dt.find((d) => d.s === "test-slug");
+
+    expect(dt).toBeDefined();
+    expect(dt!.h).toBe(2);
+    expect(dt!.mf).toBe("Test Mfr");
+    expect(dt!.m).toBe("Test Model");
+    expect(dt!.c).toBeTruthy(); // Color is preserved
+    expect(dt!.x).toBe("s"); // server -> s
+  });
+
+  it("encodes a device with an empty-string container_id as rack-level, not a child (#3076)", () => {
+    // A prior-release rack-level device can serialize container_id as "".
+    const deviceType = createTestDeviceType({ slug: "server" });
+    const device = createTestDevice({
+      device_type: "server",
+      position: 5,
+      container_id: "",
+    });
+
+    const layout = createTestLayout({
+      racks: [createTestRack({ devices: [device] })],
+      device_types: [deviceType],
+    });
+
+    const minimal = toMinimalLayout(layout);
+    const encoded = minimal.rs[0].d[0];
+
+    expect(encoded.ci).toBeUndefined();
+    expect(encoded.si).toBeUndefined();
+    expect(encoded.p).toBe(5);
+  });
+
+  it("includes optional device name when set", () => {
+    const deviceType = createTestDeviceType({ slug: "server" });
+    const device = createTestDevice({
+      device_type: "server",
+      name: "Primary DB",
+    });
+
+    const layout = createTestLayout({
+      racks: [createTestRack({ devices: [device] })],
+      device_types: [deviceType],
+    });
+
+    const minimal = toMinimalLayout(layout);
+
+    expect(minimal.rs[0].d[0].n).toBe("Primary DB");
+  });
+});
+
+// =============================================================================
+// encodeLayout / decodeLayout Tests
+// =============================================================================
+
+describe("encodeLayout", () => {
+  it("returns a non-null value", () => {
+    const layout = createLayoutWithDevices();
+    const encoded = encodeLayout(layout);
+
+    expect(encoded).not.toBeNull();
+  });
+
+  it("produces output with no slashes or equals signs (URL query-param safe)", () => {
+    const layout = createLayoutWithDevices();
+    const encoded = requireEncoded(layout);
+
+    // lz-string uses + intentionally in its alphabet; decompressFromEncodedURIComponent
+    // handles the + -> space conversion that URLSearchParams applies when parsing query params
+    expect(encoded).not.toMatch(/[/=]/);
+  });
+
+  it("round-trips correctly through URLSearchParams (+ decoded as space)", () => {
+    const layout = createLayoutWithDevices();
+    const encoded = requireEncoded(layout);
+
+    // Simulate URLSearchParams converting + to space (standard query-string decoding)
+    const fromUrlParams = encoded.replace(/\+/g, " ");
+    const decoded = requireDecoded(fromUrlParams);
+
+    expect(decoded.name).toBe(layout.name);
+    expect(decoded.racks[0].name).toBe(layout.racks[0].name);
+  });
+
+  it("produces reasonably sized output for QR codes", () => {
+    const layout = createLayoutWithDevices();
+    const encoded = requireEncoded(layout);
+
+    // Only enforce an upper bound suitable for QR codes
+    // Don't use tight bounds that break on encoding/compression changes
+    expect(encoded.length).toBeLessThan(1600);
+  });
+
+  it("encodes empty layout to small output", () => {
+    const layout = createTestLayout({
+      racks: [createTestRack({ devices: [] })],
+      device_types: [],
+    });
+    const encoded = requireEncoded(layout);
+
+    expect(encoded.length).toBeLessThan(200);
+  });
+
+  // R6d/#2988: a zero-rack layout is an expected "nothing to share yet"
+  // state (the Share dialog computes its preview before any rack exists),
+  // not an encoding error, so it must not log a warning.
+  it("returns null for a zero-rack layout without logging a warning", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const layout = createTestLayout({ racks: [], device_types: [] });
+
+      expect(encodeLayout(layout)).toBeNull();
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe("decodeLayout", () => {
+  it("returns null layout with error for invalid input", () => {
+    expect(decodeLayout("invalid").layout).toBeNull();
+    expect(decodeLayout("invalid").error).toBeDefined();
+    expect(decodeLayout("").layout).toBeNull();
+    expect(decodeLayout("!!!").layout).toBeNull();
+  });
+
+  it("routes a decoded JSON null payload to the invalid-layout message, not the unreadable-payload message", () => {
+    // `"rs" in parsed` throws for a JSON primitive; a null payload decoded
+    // successfully but is the wrong shape, so it must not be misreported as
+    // an undecodable share link.
+    const encoded = LZString.compressToEncodedURIComponent("null");
+    const { layout, error } = decodeLayout(encoded);
+
+    expect(layout).toBeNull();
+    expect(error).toBeDefined();
+    expect(error).not.toBe(unreadableImportMessage("share-link"));
+  });
+
+  it("routes a decoded JSON string payload to the invalid-layout message, not the unreadable-payload message", () => {
+    const encoded = LZString.compressToEncodedURIComponent(
+      JSON.stringify("just a string"),
+    );
+    const { layout, error } = decodeLayout(encoded);
+
+    expect(layout).toBeNull();
+    expect(error).toBeDefined();
+    expect(error).not.toBe(unreadableImportMessage("share-link"));
+  });
+
+  it("does not surface a raw share-format transport key in a v2 single-field failure", () => {
+    // Otherwise-valid MinimalLayoutV2 payload with one broken field (rack
+    // height, the `h` transport key) nested under `rs`. The Zod issue path
+    // is ["rs", 0, "h"] - if passed straight through the field-humanizer
+    // this would leak abbreviated wire-format keys (e.g. "R h must be...").
+    const payload = {
+      v: "1.0",
+      n: "Test Layout",
+      rs: [{ i: "0", n: "Rack 1", h: "not-a-number", w: 19, d: [] }],
+      dt: [],
+    };
+    const encoded = LZString.compressToEncodedURIComponent(
+      JSON.stringify(payload),
+    );
+    const { layout, error } = decodeLayout(encoded);
+
+    expect(layout).toBeNull();
+    expect(error).toBe(INVALID_LAYOUT_FORMAT_MESSAGE);
+    expect(error).not.toMatch(/\brs\b/i);
+    expect(error).not.toMatch(/\bh\b/i);
+  });
+
+  it("round-trips layout through encode/decode", () => {
+    const original = createLayoutWithDevices();
+    const encoded = requireEncoded(original);
+    const decoded = requireDecoded(encoded);
+
+    expect(decoded.name).toBe(original.name);
+    expect(decoded.racks[0].name).toBe(original.racks[0].name);
+    expect(decoded.racks[0].height).toBe(original.racks[0].height);
+    // Check device was preserved
+    expect(
+      decoded.racks[0].devices.find((d) => d.device_type === "test-server"),
+    ).toBeDefined();
+    // Check device type was preserved
+    expect(
+      decoded.device_types.find((dt) => dt.slug === "test-server"),
+    ).toBeDefined();
+  });
+
+  it("generates a unique id for each decoded device", () => {
+    const deviceType = createTestDeviceType({
+      slug: "test-server",
+      u_height: 1,
+      category: "server",
+      model: "Test Server",
+    });
+    const original = createTestLayout({
+      name: "Test Layout",
+      racks: [
+        createTestRack({
+          name: "Main Rack",
+          height: 42,
+          width: 19,
+          devices: [
+            createTestDevice({ device_type: "test-server", position: 1 }),
+            createTestDevice({ device_type: "test-server", position: 10 }),
+            createTestDevice({ device_type: "test-server", position: 20 }),
+          ],
+        }),
+      ],
+      device_types: [deviceType],
+    });
+
+    const encoded = requireEncoded(original);
+    const decoded = requireDecoded(encoded);
+
+    const ids = decoded.racks[0].devices.map((d) => d.id);
+    expect(ids.every(Boolean)).toBe(true);
+    // Decode assigns a fresh id per device; all must be distinct.
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("applies default layout settings on decode", () => {
+    const original = createLayoutWithDevices();
+    const encoded = requireEncoded(original);
+    const decoded = requireDecoded(encoded);
+
+    expect(decoded.settings.display_mode).toBe("label");
+    expect(decoded.settings.show_labels_on_images).toBe(false);
+  });
+
+  it("applies default rack properties on decode", () => {
+    const original = createLayoutWithDevices();
+    const encoded = requireEncoded(original);
+    const decoded = requireDecoded(encoded);
+
+    expect(decoded.racks[0].desc_units).toBe(false);
+    expect(decoded.racks[0].form_factor).toBe("4-post-cabinet");
+    expect(decoded.racks[0].starting_unit).toBe(1);
+    expect(decoded.racks[0].view).toBe("front");
+  });
+
+  it("preserves device positions", () => {
+    const original = createLayoutWithDevices();
+    const encoded = requireEncoded(original);
+    const decoded = requireDecoded(encoded);
+
+    expect(decoded.racks[0].devices[0].position).toBe(
+      original.racks[0].devices[0].position,
+    );
+    expect(decoded.racks[0].devices[0].face).toBe(
+      original.racks[0].devices[0].face,
+    );
+  });
+
+  it("preserves device custom names", () => {
+    const deviceType = createTestDeviceType({ slug: "server" });
+    const device = createTestDevice({
+      device_type: "server",
+      name: "My Custom Name",
+    });
+
+    const layout = createTestLayout({
+      racks: [createTestRack({ devices: [device] })],
+      device_types: [deviceType],
+    });
+
+    const encoded = requireEncoded(layout);
+    const decoded = requireDecoded(encoded);
+
+    expect(decoded.racks[0].devices[0].name).toBe("My Custom Name");
+  });
+
+  it("rejects an over-length encoded input before decompressing", () => {
+    // Spy on the inflate paths to confirm the size guard short-circuits before
+    // any decompression runs. decodeLayout uses pako.Inflate (class) for the
+    // legacy path; pako.inflate (function) is covered too for completeness.
+    const inflateSpy = vi.spyOn(pako, "inflate");
+    const InflateSpy = vi.spyOn(pako, "Inflate");
+    const oversized = "A".repeat(MAX_ENCODED_LENGTH + 1);
+
+    const result = decodeLayout(oversized);
+
+    expect(result.layout).toBeNull();
+    expect(result.error).toBeDefined();
+    expect(inflateSpy).not.toHaveBeenCalled();
+    expect(InflateSpy).not.toHaveBeenCalled();
+    inflateSpy.mockRestore();
+    InflateSpy.mockRestore();
+  });
+
+  it("aborts decompression when output exceeds the decompressed ceiling", () => {
+    // A small, highly compressible payload that inflates past the ceiling.
+    // Stays well under MAX_ENCODED_LENGTH so the input-size guard passes and
+    // the decompressed-size ceiling is the thing under test.
+    const huge = "a".repeat(MAX_DECOMPRESSED_BYTES + 1024);
+    const compressed = pako.deflate(huge);
+    const encoded = base64UrlEncode(compressed);
+
+    expect(encoded.length).toBeLessThanOrEqual(MAX_ENCODED_LENGTH);
+
+    const result = decodeLayout(encoded);
+
+    expect(result.layout).toBeNull();
+    expect(result.error).toBeDefined();
+  });
+
+  it("rejects a payload whose byte length exceeds the ceiling even when its character count does not", () => {
+    // Byte-accuracy guard: 中 is 3 UTF-8 bytes but one UTF-16 code unit, so ~3M of
+    // them decode to ~9 MB (over MAX_DECOMPRESSED_BYTES) while the string length
+    // (~3M) stays under it. A character-based guard would wrongly accept this; the
+    // byte-based guard rejects it. Compresses tiny, so the input-size guard passes
+    // and the decompressed byte ceiling is the thing under test.
+    const oversizedByBytes = "中".repeat(3_000_000);
+    expect(oversizedByBytes.length).toBeLessThan(MAX_DECOMPRESSED_BYTES);
+    const layout = createTestLayout({
+      name: oversizedByBytes,
+      racks: [
+        createTestRack({
+          devices: [
+            createTestDevice({ device_type: "pako-server", position: 2 }),
+          ],
+        }),
+      ],
+      device_types: [createTestDeviceType({ slug: "pako-server" })],
+    });
+    const encoded = base64UrlEncode(
+      pako.deflate(JSON.stringify(toMinimalLayout(layout))),
+    );
+    expect(encoded.length).toBeLessThanOrEqual(MAX_ENCODED_LENGTH);
+
+    const result = decodeLayout(encoded);
+
+    expect(result.layout).toBeNull();
+    expect(result.error).toBeDefined();
+  });
+});
+
+// =============================================================================
+// generateShareUrl Tests
+// =============================================================================
+
+describe("generateShareUrl", () => {
+  beforeEach(() => {
+    vi.stubGlobal("window", {
+      location: {
+        origin: "https://app.racku.la",
+        pathname: "/",
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("generates URL with encoded layout parameter", () => {
+    const layout = createLayoutWithDevices();
+    const url = generateShareUrl(layout);
+
+    expect(url).toMatch(/^https:\/\/app\.racku\.la\/\?l=/);
+    expect(url).toContain("?l=");
+  });
+
+  it("uses current origin and pathname", () => {
+    vi.stubGlobal("window", {
+      location: {
+        origin: "https://custom.domain.com",
+        pathname: "/app/",
+      },
+    });
+
+    const layout = createLayoutWithDevices();
+    const url = generateShareUrl(layout);
+
+    expect(url).toMatch(/^https:\/\/custom\.domain\.com\/app\/\?l=/);
+  });
+});
+
+// =============================================================================
+// getShareParam Tests
+// =============================================================================
+
+describe("getShareParam", () => {
+  beforeEach(() => {
+    vi.stubGlobal("window", {
+      location: {
+        search: "",
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns null when no parameter present", () => {
+    expect(getShareParam()).toBeNull();
+  });
+
+  it("returns parameter value when present", () => {
+    vi.stubGlobal("window", {
+      location: {
+        search: "?l=abc123",
+      },
+    });
+
+    expect(getShareParam()).toBe("abc123");
+  });
+
+  it("returns null when different parameter present", () => {
+    vi.stubGlobal("window", {
+      location: {
+        search: "?other=value",
+      },
+    });
+
+    expect(getShareParam()).toBeNull();
+  });
+});
+
+// =============================================================================
+// clearShareParam Tests
+// =============================================================================
+
+describe("clearShareParam", () => {
+  let replaceStateSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    replaceStateSpy = vi.fn();
+
+    vi.stubGlobal("window", {
+      location: {
+        href: "https://app.racku.la/?l=abc123",
+        search: "?l=abc123",
+      },
+      history: {
+        replaceState: replaceStateSpy,
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("calls replaceState to remove parameter", () => {
+    clearShareParam();
+
+    expect(replaceStateSpy).toHaveBeenCalledWith(
+      {},
+      "",
+      "https://app.racku.la/",
+    );
+  });
+
+  it("preserves other URL parameters", () => {
+    const newSpy = vi.fn();
+    vi.stubGlobal("window", {
+      location: {
+        href: "https://app.racku.la/?l=abc123&other=value",
+        search: "?l=abc123&other=value",
+      },
+      history: {
+        replaceState: newSpy,
+      },
+    });
+
+    clearShareParam();
+
+    expect(newSpy).toHaveBeenCalledWith(
+      {},
+      "",
+      "https://app.racku.la/?other=value",
+    );
+  });
+});
+
+// =============================================================================
+// Integration Tests
+// =============================================================================
+
+describe("share integration", () => {
+  it("full round-trip: layout -> encode -> decode -> layout", () => {
+    const deviceType = createTestDeviceType({
+      slug: "integration-test",
+      u_height: 3,
+      manufacturer: "Test Corp",
+      model: "Model X",
+      colour: "#AABBCC",
+      category: "network",
+    });
+
+    const devices = [
+      createTestDevice({
+        device_type: "integration-test",
+        position: 1,
+        face: "front",
+        name: "Device 1",
+      }),
+      createTestDevice({
+        device_type: "integration-test",
+        position: 5,
+        face: "rear",
+        name: "Device 2",
+      }),
+    ];
+
+    const original = createTestLayout({
+      name: "Integration Test Layout",
+      racks: [
+        createTestRack({
+          name: "Test Rack",
+          height: 24,
+          width: 10,
+          devices,
+        }),
+      ],
+      device_types: [deviceType],
+    });
+
+    const encoded = requireEncoded(original);
+    const decoded = requireDecoded(encoded);
+
+    expect(decoded.name).toBe("Integration Test Layout");
+    expect(decoded.racks[0].name).toBe("Test Rack");
+    expect(decoded.racks[0].height).toBe(24);
+    expect(decoded.racks[0].width).toBe(10);
+    // Check both devices were preserved
+    expect(
+      decoded.racks[0].devices.find((d) => d.name === "Device 1"),
+    ).toBeDefined();
+    expect(
+      decoded.racks[0].devices.find((d) => d.name === "Device 2"),
+    ).toBeDefined();
+    expect(decoded.device_types[0].manufacturer).toBe("Test Corp");
+  });
+
+  it("handles layout with many devices", () => {
+    const deviceType = createTestDeviceType({ slug: "bulk-device" });
+    const devices = Array.from({ length: 20 }, (_, i) =>
+      createTestDevice({
+        device_type: "bulk-device",
+        position: i + 1,
+        face: i % 2 === 0 ? "front" : "rear",
+      }),
+    );
+
+    const layout = createTestLayout({
+      racks: [createTestRack({ height: 42, devices })],
+      device_types: [deviceType],
+    });
+
+    const encoded = requireEncoded(layout);
+    const decoded = requireDecoded(encoded);
+
+    // Check devices are present at first and last positions (positions are in internal units)
+    expect(
+      decoded.racks[0].devices.find((d) => d.position === toInternalUnits(1)),
+    ).toBeDefined();
+    expect(
+      decoded.racks[0].devices.find((d) => d.position === toInternalUnits(20)),
+    ).toBeDefined();
+    expect(decoded.racks[0].devices.length).toBeGreaterThan(0);
+
+    // Output should still be reasonable for QR codes
+    expect(encoded.length).toBeLessThan(1600);
+  });
+});
+
+// =============================================================================
+// Multi-Rack Tests (v2 schema)
+// =============================================================================
+
+describe("multi-rack share", () => {
+  it("round-trips multi-rack layout with devices", () => {
+    const serverType = createTestDeviceType({
+      slug: "server-1u",
+      u_height: 1,
+      category: "server",
+    });
+    const switchType = createTestDeviceType({
+      slug: "switch-1u",
+      u_height: 1,
+      category: "network",
+    });
+
+    const rack1 = createTestRack({
+      id: "rack-a",
+      name: "Rack A",
+      height: 42,
+      devices: [
+        createTestDevice({
+          device_type: "server-1u",
+          position: 1,
+          face: "front",
+        }),
+      ],
+    });
+    const rack2 = createTestRack({
+      id: "rack-b",
+      name: "Rack B",
+      height: 24,
+      devices: [
+        createTestDevice({
+          device_type: "switch-1u",
+          position: 3,
+          face: "front",
+        }),
+      ],
+    });
+
+    const layout = createTestLayout({
+      name: "Multi-Rack Layout",
+      racks: [rack1, rack2],
+      device_types: [serverType, switchType],
+    });
+
+    const encoded = requireEncoded(layout);
+    const decoded = requireDecoded(encoded);
+
+    // eslint-disable-next-line no-restricted-syntax -- round-trip must preserve exact rack count
+    expect(decoded.racks).toHaveLength(2);
+    expect(decoded.racks[0].name).toBe("Rack A");
+    expect(decoded.racks[0].height).toBe(42);
+    expect(decoded.racks[1].name).toBe("Rack B");
+    expect(decoded.racks[1].height).toBe(24);
+    expect(
+      decoded.racks[0].devices.find((d) => d.device_type === "server-1u"),
+    ).toBeDefined();
+    expect(
+      decoded.racks[1].devices.find((d) => d.device_type === "switch-1u"),
+    ).toBeDefined();
+  });
+
+  it("round-trips bayed rack group", () => {
+    const deviceType = createTestDeviceType({ slug: "device-1u" });
+    const rack1 = createTestRack({
+      id: "bay-1",
+      name: "Bay 1",
+      height: 42,
+      devices: [createTestDevice({ device_type: "device-1u", position: 1 })],
+    });
+    const rack2 = createTestRack({
+      id: "bay-2",
+      name: "Bay 2",
+      height: 42,
+      devices: [createTestDevice({ device_type: "device-1u", position: 2 })],
+    });
+
+    const layout = createTestLayout({
+      name: "Bayed Layout",
+      racks: [rack1, rack2],
+      rack_groups: [
+        {
+          id: "group-1",
+          name: "Server Bay",
+          rack_ids: ["bay-1", "bay-2"],
+          layout_preset: "bayed",
+        },
+      ],
+      device_types: [deviceType],
+    });
+
+    const encoded = requireEncoded(layout);
+    const decoded = requireDecoded(encoded);
+
+    // eslint-disable-next-line no-restricted-syntax -- round-trip must preserve exact rack count
+    expect(decoded.racks).toHaveLength(2);
+    expect(decoded.rack_groups).toBeDefined();
+    // eslint-disable-next-line no-restricted-syntax -- round-trip must preserve exact group count
+    expect(decoded.rack_groups).toHaveLength(1);
+    const group = decoded.rack_groups![0];
+    expect(group.name).toBe("Server Bay");
+    expect(group.layout_preset).toBe("bayed");
+    // eslint-disable-next-line no-restricted-syntax -- round-trip must preserve exact rack_ids count
+    expect(group.rack_ids).toHaveLength(2);
+    expect(group.rack_ids).toContain(decoded.racks[0].id);
+    expect(group.rack_ids).toContain(decoded.racks[1].id);
+  });
+
+  it("deduplicates device types used across multiple racks", () => {
+    const sharedType = createTestDeviceType({ slug: "shared-device" });
+    const rack1 = createTestRack({
+      id: "r1",
+      name: "Rack 1",
+      devices: [
+        createTestDevice({ device_type: "shared-device", position: 1 }),
+      ],
+    });
+    const rack2 = createTestRack({
+      id: "r2",
+      name: "Rack 2",
+      devices: [
+        createTestDevice({ device_type: "shared-device", position: 2 }),
+      ],
+    });
+
+    const layout = createTestLayout({
+      racks: [rack1, rack2],
+      device_types: [sharedType],
+    });
+
+    const minimal = toMinimalLayout(layout);
+
+    // Should have exactly one device type entry despite being used in both racks
+    const matchingTypes = minimal.dt.filter((dt) => dt.s === "shared-device");
+    // eslint-disable-next-line no-restricted-syntax -- deduplication behavioral invariant
+    expect(matchingTypes).toHaveLength(1);
+  });
+
+  it("preserves rack ordering across round-trip", () => {
+    const deviceType = createTestDeviceType({ slug: "generic" });
+    const racks = ["Alpha", "Beta", "Gamma"].map((name, i) =>
+      createTestRack({
+        id: `rack-${i}`,
+        name,
+        devices: [createTestDevice({ device_type: "generic", position: 1 })],
+      }),
+    );
+
+    const layout = createTestLayout({
+      racks,
+      device_types: [deviceType],
+    });
+
+    const encoded = requireEncoded(layout);
+    const decoded = requireDecoded(encoded);
+
+    expect(decoded.racks[0].name).toBe("Alpha");
+    expect(decoded.racks[1].name).toBe("Beta");
+    expect(decoded.racks[2].name).toBe("Gamma");
+  });
+
+  it("decodes v1 share links (backward compatibility)", () => {
+    // Manually construct a v1 payload (single rack with `r` field)
+    const v1Payload = {
+      v: "1.0",
+      n: "Legacy Layout",
+      r: {
+        n: "Old Rack",
+        h: 42,
+        w: 19,
+        d: [{ t: "legacy-server", p: 5, f: "front" as const }],
+      },
+      dt: [{ s: "legacy-server", h: 2, c: "#336699", x: "s" }],
+    };
+
+    const json = JSON.stringify(v1Payload);
+    const compressed = pako.deflate(json);
+    const encoded = base64UrlEncode(compressed);
+
+    const { layout: decoded } = decodeLayout(encoded);
+
+    expect(decoded).not.toBeNull();
+    expect(decoded!.name).toBe("Legacy Layout");
+    expect(decoded!.racks[0].name).toBe("Old Rack");
+    expect(decoded!.racks[0].height).toBe(42);
+    expect(
+      decoded!.racks[0].devices.find((d) => d.device_type === "legacy-server"),
+    ).toBeDefined();
+    expect(
+      decoded!.device_types.find((dt) => dt.slug === "legacy-server"),
+    ).toBeDefined();
+  });
+
+  it("decodes pako-encoded v2 share links (backward compatibility)", () => {
+    // Construct a pako-encoded v2 payload to verify pre-migration URLs still decode
+    const serverType = createTestDeviceType({ slug: "pako-server" });
+    const rack = createTestRack({
+      id: "legacy-rack",
+      name: "Legacy Rack",
+      height: 24,
+      devices: [createTestDevice({ device_type: "pako-server", position: 2 })],
+    });
+    const layout = createTestLayout({
+      name: "Pako Layout",
+      racks: [rack],
+      device_types: [serverType],
+    });
+    const minimal = toMinimalLayout(layout);
+    const json = JSON.stringify(minimal);
+    const compressed = pako.deflate(json);
+    const encoded = base64UrlEncode(compressed);
+
+    const { layout: decoded } = decodeLayout(encoded);
+
+    expect(decoded).not.toBeNull();
+    expect(decoded!.name).toBe("Pako Layout");
+    expect(decoded!.racks[0].name).toBe("Legacy Rack");
+    expect(
+      decoded!.racks[0].devices.find((d) => d.device_type === "pako-server"),
+    ).toBeDefined();
+  });
+
+  it("decodes a large pako-encoded share link with multi-byte UTF-8 spanning chunk boundaries", () => {
+    // Regression guard for the pako 3.x migration. pako's streaming Inflate emits
+    // 64 KB Uint8Array chunks, so a payload larger than one chunk can split a
+    // multi-byte UTF-8 sequence across a boundary. inflateBounded must decode with a
+    // single streaming TextDecoder; decoding each chunk in isolation corrupts those
+    // characters. 中 is 3 bytes and 65536 is not a multiple of 3, so boundaries fall
+    // mid-character. ~240 KB decompressed spans ~4 chunks but deflates to a tiny link.
+    const longName = "中".repeat(80000);
+    const serverType = createTestDeviceType({ slug: "pako-server" });
+    const layout = createTestLayout({
+      name: longName,
+      racks: [
+        createTestRack({
+          devices: [
+            createTestDevice({ device_type: "pako-server", position: 2 }),
+          ],
+        }),
+      ],
+      device_types: [serverType],
+    });
+    const encoded = base64UrlEncode(
+      pako.deflate(JSON.stringify(toMinimalLayout(layout))),
+    );
+
+    // Stays under the input-size guard so the decompression path actually runs.
+    expect(encoded.length).toBeLessThanOrEqual(MAX_ENCODED_LENGTH);
+
+    const { layout: decoded } = decodeLayout(encoded);
+
+    expect(decoded).not.toBeNull();
+    expect(decoded!.name).toBe(longName);
+    expect(decoded!.name).not.toContain("�");
+  });
+
+  it("uses lz-string encoding for new share links", () => {
+    const layout = createLayoutWithDevices();
+    const encoded = requireEncoded(layout);
+
+    // lz-string output should decompress successfully with LZString
+    const decompressed = LZString.decompressFromEncodedURIComponent(encoded);
+    expect(decompressed).not.toBeNull();
+    expect(decompressed).not.toBe("");
+    const parsed = JSON.parse(decompressed!);
+    expect(parsed).toHaveProperty("rs");
+  });
+
+  it("assigns sequential short IDs to racks in minimal format", () => {
+    const deviceType = createTestDeviceType({ slug: "test-dev" });
+    const racks = [0, 1, 2].map((i) =>
+      createTestRack({
+        id: `rack-${i}`,
+        name: `Rack ${i}`,
+        devices: [createTestDevice({ device_type: "test-dev", position: 1 })],
+      }),
+    );
+
+    const layout = createTestLayout({
+      racks,
+      device_types: [deviceType],
+    });
+
+    const minimal = toMinimalLayout(layout);
+
+    expect(minimal.rs[0].i).toBe("0");
+    expect(minimal.rs[1].i).toBe("1");
+    expect(minimal.rs[2].i).toBe("2");
+  });
+
+  it("omits rack_groups when layout has none", () => {
+    const layout = createLayoutWithDevices();
+    const encoded = requireEncoded(layout);
+    const decoded = requireDecoded(encoded);
+
+    expect(decoded.rack_groups).toBeUndefined();
+  });
+});

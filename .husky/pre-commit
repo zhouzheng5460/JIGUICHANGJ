@@ -1,0 +1,52 @@
+#!/usr/bin/env sh
+# Verify package-lock.json is in sync with package.json
+if git diff --cached --name-only | grep -q 'package.json'; then
+  echo "Checking package-lock.json is in sync..."
+  npm ci --dry-run --ignore-scripts 2>/dev/null || {
+    echo "Error: package-lock.json is out of sync with package.json"
+    echo "Run 'npm install' and stage package-lock.json"
+    exit 1
+  }
+fi
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(js|ts|svelte|json|md|css|html)$' || true)
+if [ -n "$STAGED" ]; then
+  # Resolve prettier through node's module resolution instead of a hard-coded
+  # ./node_modules path. Linked git worktrees have no local node_modules, but
+  # they nest under the primary checkout, so require.resolve walks up and finds
+  # its prettier (the same mechanism the vitest step below relies on). Fail
+  # closed if prettier is genuinely unavailable, so unformatted code can never
+  # slip past to CI's format:check.
+  PRETTIER_BIN=$(node -e "process.stdout.write(require.resolve('prettier/bin/prettier.cjs'))" 2>/dev/null)
+  if [ -z "$PRETTIER_BIN" ]; then
+    echo "Error: prettier not found - run 'npm install' at the repo root" >&2
+    exit 1
+  fi
+  # Prefix each path with ./ so a filename starting with '-' is read as a path,
+  # not a CLI option (matching the vitest step below). Without this, prettier and
+  # git add could misparse such a staged file.
+  echo "$STAGED" | sed 's,^,./,' | tr '\n' '\0' | xargs -0 node "$PRETTIER_BIN" --write --ignore-unknown || {
+    echo "Error: prettier formatting failed" >&2
+    exit 1
+  }
+  echo "$STAGED" | sed 's,^,./,' | tr '\n' '\0' | xargs -0 git add || {
+    echo "Error: Failed to re-stage formatted files" >&2
+    exit 1
+  }
+fi
+
+# Run tests only for files related to staged changes
+# Skip on Windows UNC paths (\\server\share): vite cannot resolve plugins from file://server/...
+REPO_PATH="$(pwd)"
+CHANGED=$(git diff --cached --name-only --diff-filter=ACMR -- '*.ts' '*.svelte' || true)
+if [ -n "$CHANGED" ]; then
+  case "$REPO_PATH" in
+    //*) ;; # Skip on UNC paths
+    *)
+      # Prefix each path with ./ so a filename starting with '-' is read as a
+      # path, not a vitest CLI option (a '--' separator makes related find no tests).
+      echo "$CHANGED" | sed 's,^,./,' | tr '\n' '\0' |
+        NODE_OPTIONS=--max-old-space-size=8192 xargs -0 npx --no-install vitest related --run --passWithNoTests --reporter=dot
+      ;;
+  esac
+fi

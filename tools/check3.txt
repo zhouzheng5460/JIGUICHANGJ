@@ -1,0 +1,9 @@
+﻿
+> rackula@26.9.0 check
+> svelte-check --tsconfig ./tsconfig.json
+
+Loading svelte-check in workspace: g:\Rackula-main\Rackula-main
+Getting Svelte diagnostics...
+
+[32msvelte-check found 0 errors and 0 warnings
+[39m

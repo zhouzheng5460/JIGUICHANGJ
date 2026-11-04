@@ -1,0 +1,399 @@
+/* Rackula - Global Styles and CSS Custom Properties */
+
+/* Import Design Token System - must come first per CSS spec */
+@import "./lib/styles/tokens.css";
+@import "./lib/styles/animations.css";
+@import "./lib/styles/dialogs.css";
+
+:root {
+  --keyboard-height: 0px;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ==========================================================================
+   FONT FACE DECLARATIONS
+   Self-hosted fonts for the Dracula design system
+   ========================================================================== */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("/fonts/SpaceGrotesk-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Reset and base styles */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: var(--font-family);
+  background: var(--colour-bg);
+  color: var(--colour-text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden; /* Prevent horizontal scroll on narrow viewports */
+}
+
+#app {
+  height: 100%;
+}
+
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--colour-focus-ring);
+  outline-offset: var(--space-1);
+  box-shadow: var(--glow-pink-sm);
+}
+
+/* Button reset */
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Input reset */
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: var(--space-2);
+  height: var(--space-2);
+}
+
+::-webkit-scrollbar-track {
+  background: var(--colour-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--colour-border);
+  border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--colour-text-muted);
+}
+
+/* Form Input Styles */
+.input-field {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--colour-border);
+  border-radius: var(--radius-md);
+  background-color: var(--colour-surface);
+  color: var(--colour-text);
+  font-size: var(--font-size-base);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+/* Hover state */
+.input-field:hover:not(:disabled):not(:focus) {
+  border-color: var(--colour-border-hover);
+}
+
+/* Focus state */
+.input-field:focus {
+  outline: none;
+  border-color: var(--colour-border-focus);
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--colour-selection) 25%, transparent);
+}
+
+/* Invalid state */
+.input-field:invalid,
+.input-field.error {
+  border-color: var(--colour-error);
+}
+
+.input-field:invalid:focus,
+.input-field.error:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--colour-error) 25%, transparent);
+}
+
+/* Disabled state */
+.input-field:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background-color: var(--colour-surface-muted, rgba(255, 255, 255, 0.02));
+}
+
+/* Error message */
+.input-error {
+  color: var(--colour-error);
+  font-size: var(--font-size-xs);
+  margin-top: var(--space-1);
+}
+
+/* Utility classes */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Contrast-safe text utilities (WCAG AA compliant) */
+.text-high-contrast {
+  color: var(--colour-text); /* 18:1+ on bg, meets 4.5:1 AA */
+}
+
+.text-medium-contrast {
+  color: var(--colour-text-muted); /* 4.5:1+ on every surface, meets AA */
+}
+
+/* Use for decorative/non-essential text only */
+/* Note: WCAG exempts disabled/inactive UI elements from contrast requirements */
+.text-low-contrast {
+  color: var(--colour-text-disabled);
+}
+
+/* ==========================================================================
+   Animation Keyframes
+   ========================================================================== */
+
+/* Device Drop Animation - Subtle scale + opacity for dropped devices */
+@keyframes device-settle {
+  0% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.device-just-dropped {
+  animation: device-settle var(--duration-normal) var(--ease-spring);
+}
+
+/* Drawer Slide Animations */
+@keyframes drawer-slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes drawer-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.drawer-left {
+  animation: drawer-slide-in-left var(--duration-normal) var(--ease-out);
+}
+
+.drawer-right {
+  animation: drawer-slide-in-right var(--duration-normal) var(--ease-out);
+}
+
+/* Toast Animation - Slide up from bottom */
+@keyframes toast-slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.toast-enter {
+  animation: toast-slide-up var(--duration-normal) var(--ease-out);
+}
+
+/* Dialog Animations */
+@keyframes dialog-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-scale-in {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-sheet-in {
+  from {
+    transform: translateY(12%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.dialog-backdrop {
+  animation: dialog-fade-in var(--duration-fast) var(--ease-out);
+}
+
+.dialog {
+  animation: dialog-scale-in var(--duration-normal) var(--ease-out);
+}
+
+@media (max-width: 430px) {
+  .dialog {
+    animation: dialog-sheet-in var(--duration-normal) var(--ease-out);
+  }
+}
+
+/* Selection Pulse - For selected elements */
+@keyframes selection-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Shake Animation - For error states */
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+
+.error-shake {
+  animation: shake var(--duration-normal) var(--ease-out);
+}
+
+/* ==========================================================================
+   Reduced Motion Support (Accessibility)
+   ========================================================================== */
+
+/**
+ * Respects user's prefers-reduced-motion system setting.
+ * Disables all animations and transitions when reduced motion is preferred.
+ * WCAG 2.1 Success Criterion 2.3.3: Animation from Interactions
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

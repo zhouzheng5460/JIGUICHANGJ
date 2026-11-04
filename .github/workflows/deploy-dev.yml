@@ -1,0 +1,297 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches: [main]
+    # Globs must be `dir/**` to match files inside a directory; a bare `dir/`
+    # matches nothing, which silently disabled push deploys (#1924). Cover every
+    # input that affects the built images and the deploy step.
+    paths:
+      - api/**
+      - src/**
+      - deploy/**
+      - assets/**
+      - static/**
+      - login.html
+      - package.json
+      - package-lock.json
+      - docker-compose.yml
+      - vite.config.*
+      - svelte.config.*
+      - tsconfig*.json
+      - index.html
+      # Skip docs-only deploys. The dir globs above match every file in a
+      # directory, so a README inside api/, deploy/, etc. would otherwise
+      # trigger a rebuild. This negation (evaluated after the positives) drops
+      # markdown anywhere from the trigger. Mixed code+markdown commits still
+      # match a positive path and deploy normally.
+      - "!**/*.md"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Tests run in PRs before merge - no need to re-run here
+  # For manual test runs, use the test.yml workflow
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set build commit
+        # Short hash to match the frontend's commit format (rev-parse --short).
+        run: echo "BUILD_COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_ENV=development
+            APP_COMMIT=${{ env.BUILD_COMMIT }}
+
+  build-api:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for API
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api
+          tags: |
+            type=ref,event=branch
+
+      # Pull the base image up front with bounded retry. The build-push-action
+      # below uses the default docker driver (no setup-buildx-action), which
+      # shares the host image store, so with pull: false (the default) the build
+      # reuses this locally-present image and skips the Docker Hub manifest HEAD
+      # that times out under transient registry flakes (#2175).
+      - name: Pre-pull base image
+        working-directory: ./api
+        run: |
+          image="$(awk '/^[[:space:]]*FROM[[:space:]]/ { print $2; exit }' Dockerfile)"
+          echo "Base image: $image"
+          for attempt in 1 2 3 4 5; do
+            if docker pull "$image"; then
+              echo "Pulled $image on attempt $attempt"
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              delay=$((2 ** (attempt - 1)))
+              echo "::warning::Pull attempt $attempt for $image failed; retrying in ${delay}s"
+              sleep "$delay"
+            fi
+          done
+          echo "::error::Failed to pull $image after 5 attempts"
+          exit 1
+
+      - name: Build and push API
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ./api
+          file: ./api/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    needs: [build-frontend, build-api]
+    runs-on: [self-hosted, vps-rackula]
+    environment:
+      name: dev
+      url: https://d.racku.la
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Sync docker-compose.yml to dev
+        run: |
+          cp docker-compose.yml /opt/rackula/rackula-dev/docker-compose.yml
+          install -m 600 /dev/null /opt/rackula/rackula-dev/.env
+          cat > /opt/rackula/rackula-dev/.env << 'EOF'
+          RACKULA_PORT=127.0.0.1:8081
+          RACKULA_IMAGE=ghcr.io/rackulalives/rackula:main
+          RACKULA_API_IMAGE=ghcr.io/rackulalives/rackula-api:main
+          RACKULA_CONTAINER_NAME=rackula-dev
+          RACKULA_API_CONTAINER_NAME=rackula-api-dev
+          CORS_ORIGIN=https://d.racku.la
+          ALLOW_INSECURE_CORS=false
+          RACKULA_STORAGE_MODE=server
+          EOF
+
+      - name: Verify data dir is writable by API container (uid 1001)
+        run: |
+          DATA_DIR=/opt/rackula/rackula-dev/data
+          mkdir -p "$DATA_DIR"
+          if ! docker run --rm -u 1001:1001 -v "$DATA_DIR":/data busybox \
+              sh -c 'touch /data/.write-test && rm -f /data/.write-test'; then
+            echo "::error::$DATA_DIR is not writable by uid 1001 (rackula-api container user)."
+            echo "::error::Fix once on the host: sudo chown -R 1001:1001 $DATA_DIR"
+            exit 1
+          fi
+
+      - name: Deploy to dev
+        run: |
+          cd /opt/rackula/rackula-dev
+          docker compose --profile persist pull
+          docker compose --profile persist up -d --remove-orphans
+          # Each main build supersedes the previous :main image, leaving it
+          # dangling. Prune so untagged images don't accumulate on the VPS.
+          docker image prune -f
+
+  # Determines Cloudflare Access service-token availability up front so a
+  # missing secret (forks, some workflow_dispatch contexts) produces a
+  # distinct "skipped" conclusion on smoke-test instead of a job that runs
+  # to green having done nothing (#2720). Secrets cannot be read directly in
+  # a job-level `if:`, so the presence check runs as a step here and is
+  # published as this job's output.
+  check-cf-access:
+    name: "Check Cloudflare Access secrets"
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check secret availability
+        id: check
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          if [ -n "$CF_ACCESS_CLIENT_ID" ] && [ -n "$CF_ACCESS_CLIENT_SECRET" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Smoke test skipped: Cloudflare Access service token unavailable (fork or missing secret)"
+            {
+              echo "## Deploy Dev smoke test"
+              echo "Skipped: Cloudflare Access service token unavailable (fork or missing secret)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  smoke-test:
+    needs: [deploy, check-cf-access]
+    # Same fork guard as before (#2346), now gating the whole job so a
+    # missing secret reports as skipped rather than a silent no-op success.
+    if: ${{ needs.check-cf-access.outputs.available == 'true' }}
+    runs-on: [self-hosted, vps-rackula]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      # d.racku.la sits behind Cloudflare Access. Map the service-token secrets
+      # to env so the curl gate and the browser smoke can authenticate.
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+
+    steps:
+      # Fast curl gate: fails immediately if the server or API is unreachable,
+      # before we spend time spinning up a browser.
+      - name: Verify deployment responds
+        run: |
+          sleep 5
+          curl -sf --retry 5 --retry-delay 3 \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            https://d.racku.la
+          curl -sf --retry 5 --retry-delay 3 \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            https://d.racku.la/api/layouts
+
+      # The vps-rackula runner is not ephemeral: it reuses _work across jobs, and
+      # a prior sparse checkout can leave an index that makes actions/checkout's
+      # clean skip restoring package-lock.json. Wipe the workspace first so the
+      # checkout below starts from a clean slate and npm ci finds the lockfile
+      # (#2327). Mirrors the e2e (self-hosted full suite) job in test.yml.
+      - name: Clean self-hosted workspace
+        run: |
+          if [ -n "$GITHUB_WORKSPACE" ] && [ -d "$GITHUB_WORKSPACE" ]; then
+            find "$GITHUB_WORKSPACE" -mindepth 1 -delete
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No cache: "npm" here. The npm cache lookup runs before checkout settles
+      # and hard-errors ("Dependencies lock file is not found", #2327) if a stale
+      # workspace ever slips through. The clean-workspace step above is the root
+      # fix; dropping the cache removes the fragile lockfile-hash dependency.
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-chromium-
+
+      - name: Install Playwright chromium
+        # --with-deps installs OS libraries via apt and needs root; fall back to a
+        # plain browser install when the self-hosted runner already has them.
+        run: npx playwright install --with-deps chromium || npx playwright install chromium
+
+      - name: Browser smoke test against deployed app
+        # The CF_ACCESS_* env vars are inherited by the smoke config
+        # (playwright.smoke.config.ts). Without them every request lands on
+        # the login wall (#2346); the job-level check-cf-access gate above
+        # already keeps this job from running in that case.
+        env:
+          SMOKE_TEST_URL: https://d.racku.la
+        run: npm run test:e2e:smoke
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: deploy-dev-smoke-report
+          path: playwright-report/
+          retention-days: 7

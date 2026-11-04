@@ -1,0 +1,639 @@
+# Gated release orchestrator: stage -> gate -> promote (fail closed).
+#
+# A pushed CalVer tag (or a manual workflow_dispatch) stages the release as a
+# GitHub prerelease with immutable Docker tags (:vX.Y.Z) and the LXC tarball
+# attached, validates it on real targets (Docker compose health + an LXC smoke
+# test on a non-prod Proxmox), and only then promotes it: flips :latest by
+# digest, marks the GitHub release latest, and deploys to prod. The prod promote
+# sits behind a human-approval `production` Environment. Any gate failure means
+# no promote, so :latest is never overwritten and downstream keeps the last-good
+# release (automatic rollback by omission).
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to (re)run pipeline for (manual)"
+        required: false
+        type: string
+      gate_override:
+        description: "EMERGENCY: skip gates. Release STAYS prerelease (no auto-promote)."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Resolve and validate the release tag. On push the tag comes from the ref; on
+  # manual dispatch it comes from inputs.tag. Reject newline/CR (a multiline value
+  # whose first line is valid CalVer would otherwise flow into checkout refs and
+  # gh calls) and enforce strict CalVer. No write/publish permissions here.
+  validate:
+    name: "Validate Release Context"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      year_month: ${{ steps.tag.outputs.year_month }}
+    steps:
+      - name: Determine tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${INPUT_TAG}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+
+          if [[ "$TAG" == *$'\n'* || "$TAG" == *$'\r'* ]]; then
+            echo "::error::Invalid tag format '$TAG'. Tag must be a single line."
+            exit 1
+          fi
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid tag format '$TAG'. Expected version like v26.6.0"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          YEAR_MONTH=$(echo "$VERSION" | cut -d. -f1,2)
+          {
+            printf 'tag=%s\n' "$TAG"
+            printf 'version=%s\n' "$VERSION"
+            printf 'year_month=%s\n' "$YEAR_MONTH"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag format valid: $TAG"
+
+      - name: Verify tag exists (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          if ! git ls-remote --tags "https://github.com/${{ github.repository }}" "refs/tags/$TAG" | grep -q "$TAG"; then
+            echo "::error::Tag '$TAG' does not exist in remote. Push the tag first."
+            exit 1
+          fi
+          echo "Tag exists in remote: $TAG"
+
+  # Fail-closed guard: a release that changes the data schema must add a new
+  # upgrade-corpus fixture, so every future release is forced to load this
+  # release's format. See docs/superpowers/specs/2026-06-17-upgrade-safety-harness-design.md.
+  corpus-guard:
+    name: "Guard: upgrade corpus freshness"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Check corpus freshness
+        run: scripts/check-corpus-freshness.sh
+
+  # STAGE: create the GitHub release as a prerelease (excluded from /releases/latest)
+  # using the CHANGELOG entry as the notes. The release must be a prerelease until
+  # all gates pass and promote-github flips it to latest.
+  stage-release:
+    name: "Stage prerelease"
+    needs: [validate, corpus-guard]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate changelog entry exists
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "ERROR: No changelog entry found for version $VERSION"
+            echo "Please update CHANGELOG.md before releasing."
+            echo ""
+            echo "Expected format:"
+            echo "## [$VERSION] - YYYY-MM-DD"
+            exit 1
+          fi
+          echo "Changelog entry found for version $VERSION"
+
+      - name: Extract changelog entry
+        id: changelog
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          # Capture everything between this version header and the next ## [ header.
+          NOTES=$(awk "/^## \[$VERSION\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
+          NOTES=$(echo "$NOTES" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+          # Randomised heredoc delimiter: a bare "EOF" line in the changelog body
+          # would otherwise terminate the block early and corrupt the output.
+          DELIM="NOTES_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "notes<<${DELIM}"
+            echo "$NOTES"
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create prerelease (staging; excluded from /releases/latest)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          NOTES: ${{ steps.changelog.outputs.notes }}
+        run: |
+          # Idempotent on re-run: a prior partial attempt may have already staged
+          # this release (see #2709, the v26.6.5 incident, where a bare `gh release
+          # create` 422'd on re-run because the release already existed). Converge
+          # on the same end state either way instead of hard-failing.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; updating in place"
+            gh release edit "$TAG" \
+              --title "$TAG" \
+              --notes "$NOTES" \
+              --prerelease
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "$NOTES" \
+              --prerelease
+          fi
+
+  # STAGE: build and push ONLY immutable Docker tags (:vX.Y.Z / :vX.Y.Z-persist /
+  # api :vX.Y.Z). No :latest, no :year_month. Promote retags these by digest.
+  stage-docker:
+    name: "Stage docker images"
+    needs: [validate]
+    permissions:
+      contents: read
+      packages: write
+      # build-images.yml's scan-images job uploads Trivy SARIF; a reusable
+      # workflow's nested jobs cannot exceed the caller's grant, so the caller
+      # must grant security-events: write (else the run is a startup_failure).
+      security-events: write
+    uses: ./.github/workflows/build-images.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version: ${{ needs.validate.outputs.version }}
+      year_month: ${{ needs.validate.outputs.year_month }}
+
+  # STAGE: build the LXC tarball and attach it to the prerelease created above.
+  stage-lxc:
+    name: "Stage LXC tarball"
+    needs: [validate, stage-release]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-lxc.yml
+    with:
+      version: ${{ needs.validate.outputs.tag }}
+
+  # GATE: bring the staged frontend image up under compose, assert it is healthy,
+  # then a persistence round-trip against the persist image asserting /api/health.
+  # No publish creds: packages:read only. Skipped only under the emergency override.
+  gate-docker:
+    name: "Gate: docker compose health"
+    needs: [validate, stage-docker]
+    if: ${{ !inputs.gate_override }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+          sparse-checkout: |
+            docker-compose.yml
+          sparse-checkout-cone-mode: false
+
+      - name: Set lowercase image base
+        run: echo "IMAGE_NAME_LC=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Frontend compose health gate (pull by version tag)
+        env:
+          RACKULA_IMAGE: ghcr.io/${{ env.IMAGE_NAME_LC }}:${{ needs.validate.outputs.version }}
+          RACKULA_PORT: 127.0.0.1:8080
+        run: |
+          # docker-compose.yml references the frontend image via ${RACKULA_IMAGE}
+          # so the gate runs the exact :vX.Y.Z artifact that will be promoted.
+          docker compose -f docker-compose.yml pull
+          docker compose -f docker-compose.yml up -d
+          ok=""
+          attempt=0
+          while [ "$attempt" -lt 30 ]; do
+            if curl -sf http://localhost:8080/ >/dev/null; then ok=1; break; fi
+            attempt=$((attempt + 1))
+            sleep 3
+          done
+          [ -n "$ok" ] || { echo "::error::Frontend did not become healthy on :8080"; docker compose -f docker-compose.yml logs; exit 1; }
+          curl -sf http://localhost:8080/ >/dev/null
+          echo "Frontend health gate passed"
+          docker compose -f docker-compose.yml down
+
+      - name: Persist profile round-trip (/api/health via proxy)
+        env:
+          # The persist FRONTEND image (nginx proxies /api/ to the api sidecar).
+          RACKULA_IMAGE: ghcr.io/${{ env.IMAGE_NAME_LC }}:v${{ needs.validate.outputs.version }}-persist
+          # The api sidecar image that actually serves /api/health.
+          RACKULA_API_IMAGE: ghcr.io/${{ env.IMAGE_NAME_LC }}-api:${{ needs.validate.outputs.version }}
+          RACKULA_PORT: 127.0.0.1:8080
+        run: |
+          # /api/health is served by the rackula-api sidecar and reverse-proxied by
+          # nginx in the persist frontend container, so a single container cannot
+          # answer it. Bring up the compose persist profile with BOTH staged images.
+          # Pull explicitly first so a missing staged image fails the gate loudly.
+          docker compose --profile persist pull
+          docker compose --profile persist up -d
+          ok=""
+          attempt=0
+          while [ "$attempt" -lt 30 ]; do
+            if curl -sf http://localhost:8080/api/health >/dev/null; then ok=1; break; fi
+            attempt=$((attempt + 1))
+            sleep 3
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::Persist profile /api/health did not return 200 through the proxy"
+            docker compose --profile persist logs
+            docker compose --profile persist down -v
+            exit 1
+          fi
+          # Round-trip through the proxy: API reachable via /api/health AND the
+          # persist frontend served on /.
+          curl -sf http://localhost:8080/api/health >/dev/null
+          curl -sf http://localhost:8080/ >/dev/null || {
+            echo "::error::Persist frontend did not serve / on :8080"
+            docker compose --profile persist logs
+            docker compose --profile persist down -v
+            exit 1
+          }
+          echo "Persist round-trip gate passed"
+          docker compose --profile persist down -v
+
+  # GATE: deploy the staged LXC tarball onto a throwaway unprivileged CT in the
+  # ci-smoke pool on pve-prod (lxc-gate self-hosted runner) and smoke-test it, via
+  # a least-privileged Proxmox token scoped to that pool. Skipped only under the
+  # emergency override.
+  #
+  # The self-hosted lxc-gate runner (label lxc-gate) runs scripts/lxc-smoke-test.sh in its
+  # api driver (#1982): CT lifecycle via the Proxmox API + ssh-into-CT, no pct on the runner.
+  gate-lxc:
+    name: "Gate: LXC smoke test"
+    needs: [validate, stage-lxc]
+    if: ${{ !inputs.gate_override }}
+    runs-on: [self-hosted, lxc-gate]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+          # The script runs the canonical install/update scripts, so the checkout must
+          # include deploy/lxc/community-scripts/ alongside the script itself.
+          sparse-checkout: |
+            scripts/lxc-smoke-test.sh
+            deploy/lxc/community-scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Download staged tarball and verify checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          # Resolve and download the rackula-lxc tarball and its .sha256 from the
+          # (pre)release for $TAG by asset API URL, then verify integrity end to end:
+          # this is the post-upload checksum check (the asset is fetched from the
+          # release, not from the build artifact). Uses curl + jq only: the
+          # self-hosted runner has no gh CLI (and does not need one).
+          release_json="$(curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GH_REPO}/releases/tags/${TAG}")"
+
+          # The tarball asset name (e.g. rackula-lxc-v26.6.3.tar.gz) is the bare
+          # filename recorded inside the .sha256 file, so download to that exact
+          # name to keep sha256sum -c satisfied.
+          tarball_name="$(echo "$release_json" \
+            | jq -r 'first(.assets[] | select(.name | test("^rackula-lxc-.*\\.tar\\.gz$")) | .name) // empty')"
+          tarball_url="$(echo "$release_json" \
+            | jq -r 'first(.assets[] | select(.name | test("^rackula-lxc-.*\\.tar\\.gz$")) | .url) // empty')"
+          [ -n "$tarball_name" ] && [ -n "$tarball_url" ] || { echo "::error::no rackula-lxc-*.tar.gz asset on release ${TAG}"; exit 1; }
+          # Select the .sha256 that matches the chosen tarball by exact name, so the
+          # checksum always belongs to the tarball we downloaded.
+          checksum_name="${tarball_name}.sha256"
+          checksum_url="$(echo "$release_json" \
+            | jq -r --arg checksum_name "$checksum_name" 'first(.assets[] | select(.name == $checksum_name) | .url) // empty')"
+          [ -n "$checksum_url" ] || { echo "::error::no ${checksum_name} asset on release ${TAG}"; exit 1; }
+
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o "$tarball_name" "$tarball_url"
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o "${tarball_name}.sha256" "$checksum_url"
+          [ -s "$tarball_name" ] || { echo "::error::downloaded tarball is empty"; exit 1; }
+
+          if ! sha256sum -c "${tarball_name}.sha256"; then
+            echo "::error::SHA256 verification failed for ${tarball_name} downloaded from release ${TAG}"
+            exit 1
+          fi
+          echo "Checksum verified for ${tarball_name} (downloaded from release ${TAG})"
+
+          # The smoke gate step globs rackula-lxc-*.tar.gz; the asset name already
+          # matches that glob, so no rename is needed.
+
+      - name: LXC smoke gate (deploy-only bootstrap for v26.6.3)
+        run: |
+          # Load the scoped Proxmox token + CT settings from the runner-local env.
+          set -a; . /opt/github-runner/proxmox-smoke.env; set +a
+          bash scripts/lxc-smoke-test.sh --driver api --tarball rackula-lxc-*.tar.gz --mode deploy
+          # From the next release onward, switch to upgrade-gating against the last
+          # known-good tarball:
+          #   bash scripts/lxc-smoke-test.sh --driver api --tarball rackula-lxc-*.tar.gz \
+          #     --mode both --baseline <last-good tarball>
+
+  # PROMOTE CHOKE POINT: the single human-approval gate. Targets the `production`
+  # Environment so the prod flip waits for a maintainer. Runs only when both gates
+  # are green and the override was not used; if it was, this is skipped and nothing
+  # downstream of it promotes (the release stays prerelease).
+  promote-gate:
+    name: "Promote gate (approval)"
+    needs: [validate, gate-docker, gate-lxc]
+    if: ${{ always() && needs.gate-docker.result == 'success' && needs.gate-lxc.result == 'success' && !inputs.gate_override }}
+    environment:
+      name: prod
+      url: https://count.racku.la
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - run: echo "Gates green; awaiting maintainer approval to promote ${{ needs.validate.outputs.tag }}."
+
+  # PROMOTE: flip :latest and :year_month (and :persist) to the gated digests.
+  # Resolves the digest of each immutable tag and retags it; never rebuilds, so
+  # exactly what was gated is what ships. Idempotent: re-running re-points the same
+  # digest.
+  promote-docker:
+    name: "Promote docker (retag by digest)"
+    # Load-bearing: no `if: always()` here. These promote jobs rely on default
+    # success() gating through promote-gate so a failed or skipped gate skips the
+    # whole promote chain (fail closed). Do not add `if: always()`.
+    needs: [validate, promote-gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote frontend and API by digest
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          YEAR_MONTH: ${{ needs.validate.outputs.year_month }}
+        run: |
+          REPO_LC="${GITHUB_REPOSITORY,,}"
+          # img = ghcr image repo; src_tag = the gated immutable tag to resolve.
+          for spec in "ghcr.io/${REPO_LC}:${VERSION}" "ghcr.io/${REPO_LC}-api:${VERSION}"; do
+            img="${spec%%:*}"
+            digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$spec")"
+            echo "Promoting ${spec} (${digest}) -> :latest, :${YEAR_MONTH}"
+            docker buildx imagetools create \
+              --tag "${img}:latest" \
+              --tag "${img}:${YEAR_MONTH}" \
+              "${img}@${digest}"
+          done
+
+      - name: Promote persist image by digest
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          REPO_LC="${GITHUB_REPOSITORY,,}"
+          src="ghcr.io/${REPO_LC}:v${VERSION}-persist"
+          digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$src")"
+          echo "Promoting ${src} (${digest}) -> :persist"
+          docker buildx imagetools create \
+            --tag "ghcr.io/${REPO_LC}:persist" \
+            "ghcr.io/${REPO_LC}@${digest}"
+
+  # PROMOTE: publish the released tag to Cloudflare Workers Static Assets and
+  # smoke-test it (#2029). Prod no longer pulls Docker images, but it still needs
+  # promote-docker: a release whose images failed to promote must not go live.
+  #
+  # Deliberately ordered BEFORE promote-github. The GitHub release stays a
+  # prerelease until prod is actually serving the build, so a failed Cloudflare
+  # upload or a failed post-deploy smoke leaves the release marked prerelease
+  # rather than advertising as latest a build nobody can reach.
+  promote-prod:
+    name: "Promote to prod"
+    needs: [validate, promote-gate, promote-docker]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy-prod.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version: ${{ needs.validate.outputs.version }}
+    # Reusable workflows do not inherit secrets. Without this the Cloudflare
+    # credentials arrive empty and every wrangler call fails.
+    secrets: inherit
+
+  # PROMOTE: mark the GitHub release as latest (no longer a prerelease). Last in
+  # the promote chain, so "latest" means the docker tags are promoted AND prod is
+  # live on that build. Any earlier failure leaves the release a prerelease (fail
+  # closed) rather than a half-promoted split-brain state. promote-docker is
+  # reached transitively through promote-prod.
+  promote-github:
+    name: "Promote GitHub release"
+    needs: [validate, promote-gate, promote-prod]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Mark release latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          gh release edit "$TAG" --prerelease=false --latest=true
+
+  # On any failure or cancellation, summarise the failed jobs and open/update a
+  # `CI Alert` issue. Read-only except for issues:write.
+  notify-failure:
+    name: "Notify on failure"
+    if: ${{ always() && (failure() || cancelled()) }}
+    needs:
+      [
+        validate,
+        stage-release,
+        stage-docker,
+        stage-lxc,
+        gate-docker,
+        gate-lxc,
+        promote-gate,
+        promote-docker,
+        promote-prod,
+        promote-github,
+      ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Summarize failing jobs
+        id: summarize
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          VALIDATED_TAG: ${{ needs.validate.outputs.tag }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runId = context.runId;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
+            const validatedTag = process.env.VALIDATED_TAG || "unknown-tag";
+
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner,
+              repo,
+              run_id: runId,
+              per_page: 100,
+            });
+
+            const failedJobs = jobs.filter((job) =>
+              ["failure", "cancelled", "timed_out", "action_required"].includes(job.conclusion),
+            );
+
+            const failedLines = failedJobs.length
+              ? failedJobs.map((job) => `- ${job.name}: ${job.conclusion} (${job.html_url})`)
+              : ["- No failed jobs found; inspect workflow graph for skipped dependencies."];
+
+            core.setOutput("run_url", runUrl);
+            core.setOutput("failed_jobs", failedLines.join("\n"));
+            core.setOutput("tag_name", validatedTag);
+
+            await core.summary
+              .addHeading("Release Pipeline Failure Alert")
+              .addRaw(`Run: ${runUrl}\n\n`)
+              .addRaw("Failed jobs:\n")
+              .addRaw(failedLines.join("\n"))
+              .write();
+
+      - name: Ensure alert labels exist
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const labels = [
+              {
+                name: "ci-alert",
+                color: "B60205",
+                description: "Automated CI/CD failure alerts",
+              },
+              {
+                name: "automated",
+                color: "1D76DB",
+                description: "Created or updated by GitHub Actions automation",
+              },
+            ];
+
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  ...label,
+                });
+              } catch (error) {
+                if (error.status !== 422) {
+                  throw error;
+                }
+              }
+            }
+
+      - name: Create or update alert issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TAG_NAME: ${{ steps.summarize.outputs.tag_name }}
+          RUN_URL: ${{ steps.summarize.outputs.run_url }}
+          FAILED_JOBS: ${{ steps.summarize.outputs.failed_jobs }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const tagName = process.env.TAG_NAME || "unknown-tag";
+            const runUrl = process.env.RUN_URL;
+            const failedJobs = process.env.FAILED_JOBS;
+            const title = `CI Alert: Release pipeline failed for ${tagName}`;
+
+            const body = [
+              `Release pipeline failure detected for \`${tagName}\`.`,
+              "",
+              `Run: ${runUrl}`,
+              "",
+              "Failed jobs:",
+              failedJobs,
+            ].join("\n");
+
+            const openIssues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100,
+            });
+
+            const existing = openIssues.find((issue) => issue.title === title);
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body: `Another failure occurred.\n\n${body}`,
+              });
+              core.notice(`Updated existing alert issue #${existing.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+                labels: ["ci-alert", "automated"],
+              });
+              core.notice(`Created alert issue #${created.data.number}`);
+            }

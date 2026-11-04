@@ -1,0 +1,255 @@
+/**
+ * Layout validation schemas for API
+ * Mirrors src/lib/schemas/index.ts from main app
+ */
+import { z } from "zod";
+
+/**
+ * UUID pattern for layout metadata.id (anchored for validation)
+ * Standard UUID format: 8-4-4-4-12 hex characters with hyphens
+ */
+export const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Unanchored UUID pattern for extraction from strings
+ * Used to find UUIDs within folder names like "My Homelab-550e8400-..."
+ */
+const UUID_EXTRACTION_PATTERN =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/**
+ * UUID schema for route parameter validation.
+ * Used to validate :uuid route parameters in layout API routes.
+ */
+export const UuidSchema = z
+  .string()
+  .regex(UUID_PATTERN, "Invalid layout UUID format");
+
+/**
+ * Check if a string is a valid UUID format
+ */
+export function isUuid(str: string): boolean {
+  return UUID_PATTERN.test(str);
+}
+
+/**
+ * Extract UUID from folder name (format: "{Human Name}-{UUID}")
+ * Returns null if folder name doesn't contain a valid UUID
+ */
+export function extractUuidFromFolderName(folderName: string): string | null {
+  const match = folderName.match(UUID_EXTRACTION_PATTERN);
+  return match ? match[0] : null;
+}
+
+/**
+ * Maximum length of a filename slug.
+ *
+ * This api package can't import the frontend's src/lib/utils/slug.ts (it's a
+ * separate Bun package), so this value is duplicated as SLUG_MAX_LENGTH there
+ * too, applied by slugifyForFilename. Keep both in sync (#2932).
+ */
+const SLUG_MAX_LENGTH = 100;
+
+/**
+ * C0 control characters (0x00-0x1F) and DEL (0x7F). A NUL byte reaching
+ * `path.join()` throws `ERR_INVALID_ARG_VALUE`; other control characters are
+ * similarly unsafe or meaningless in filesystem paths (#2942).
+ */
+// eslint-disable-next-line no-control-regex -- intentionally matching control characters to strip them
+const CONTROL_CHAR_PATTERN = /[\x00-\x1f\x7f]/g;
+
+/**
+ * Sanitize a string for safe use in filesystem paths
+ * Removes path separators and other dangerous characters while keeping readability
+ */
+function sanitizeForPath(name: string): string {
+  return (
+    name
+      .replace(CONTROL_CHAR_PATTERN, "") // Strip control characters (e.g. NUL) before they reach the filesystem
+      .replace(/[/\\:*?"<>|]/g, "-") // Replace path separators and reserved chars
+      .replace(/\.\./g, "-") // Prevent directory traversal
+      .replace(/-+/g, "-") // Collapse multiple hyphens
+      .trim()
+      .slice(0, 100) // Limit length
+      .replace(/^[-.]+|[-.]+$/g, "") || // Remove leading/trailing hyphens and dots AFTER truncation, so the slice can't reintroduce a boundary dot/hyphen
+    "untitled"
+  ); // Fallback for empty result
+}
+
+/**
+ * Build folder name from layout name and UUID
+ * Format: "{Sanitized Human Name}-{UUID}"
+ * Name is sanitized to prevent path traversal attacks
+ */
+export function buildFolderName(name: string, uuid: string): string {
+  return `${sanitizeForPath(name)}-${uuid}`;
+}
+
+/**
+ * Slugify a layout name to create a safe filename
+ * Handles Unicode names by returning "untitled" if result is empty
+ *
+ * Behaviour mirrors the frontend's slugifyForFilename (src/lib/utils/slug.ts):
+ * a "+" becomes "-plus" before other processing so "DS920+" maps to
+ * "ds920-plus", hyphens are trimmed and collapsed consistently, and the result
+ * is truncated to SLUG_MAX_LENGTH (see #2932, where the two had drifted). The
+ * api is a separate Bun package and cannot import the frontend module, so the
+ * rules are kept in sync here.
+ */
+export function slugify(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .trim()
+    // Replace plus signs with 'plus' before other processing
+    .replace(/\+/g, "-plus")
+    // Replace non-alphanumeric with hyphens
+    .replace(/[^a-z0-9]+/g, "-")
+    // Remove leading/trailing hyphens
+    .replace(/^-+|-+$/g, "")
+    // Collapse multiple hyphens
+    .replace(/-+/g, "-")
+    .slice(0, SLUG_MAX_LENGTH)
+    .replace(/-+$/g, ""); // Remove trailing hyphens after truncation
+
+  // Handle empty results (e.g., all-Unicode names like "...")
+  if (!slug) {
+    return "untitled";
+  }
+
+  return slug;
+}
+
+/**
+ * Build YAML filename from layout name
+ * Format: "{slugified-name}.rackula.yaml"
+ */
+export function buildYamlFilename(name: string): string {
+  return `${slugify(name)}.rackula.yaml`;
+}
+
+/**
+ * Rejects C0 control characters (and DEL). Names (both the top-level `name` and
+ * `metadata.name`) feed `buildFolderName`/`buildYamlFilename`; `sanitizeForPath`
+ * also strips control characters as defense-in-depth, but a NUL byte reaching
+ * the filesystem layer unvalidated previously surfaced as a 500 instead of a
+ * clean 400. The `version` field never reaches the filesystem, so its check is
+ * purely about rejecting clearly-malformed data with a clean 400 (#2942).
+ */
+// eslint-disable-next-line no-control-regex -- intentionally rejecting control characters
+const NO_CONTROL_CHARS_PATTERN = /^[^\x00-\x1f\x7f]*$/;
+
+/**
+ * Layout YAML metadata section schema.
+ * Part of the data directory refactor (#570, #915).
+ * This is the new `metadata:` section in YAML files.
+ */
+export const LayoutYamlMetadataSchema = z
+  .object({
+    /** UUID - stable identity across renames/moves */
+    id: z
+      .string()
+      .min(1, "Metadata ID is required")
+      .regex(UUID_PATTERN, "Metadata ID must be a valid UUID format"),
+    /** Human-readable layout name */
+    name: z
+      .string()
+      .min(1, "Metadata name is required")
+      .max(100, "Metadata name must be 100 characters or less")
+      .regex(
+        NO_CONTROL_CHARS_PATTERN,
+        "Metadata name must not contain control characters",
+      ),
+    /** Format version for future migrations (e.g., "1.0") */
+    schema_version: z.string().min(1, "Schema version is required"),
+    /** Optional notes about the layout */
+    description: z
+      .string()
+      .max(1000, "Description must be 1000 characters or less")
+      .optional(),
+  })
+  .passthrough();
+
+/**
+ * Structural shape of a placed device, validated server-side before persisting
+ * (#2449). This is the minimal-but-meaningful subset that every valid device
+ * across shipped releases carries; the full device validation (positions,
+ * containers, port instances) happens in the SPA against the richer
+ * src/lib/schemas LayoutSchema.
+ *
+ * `.passthrough()` keeps unknown and legacy fields (e.g. slot_position) so a
+ * prior-release layout still validates and saves unchanged. The point of this
+ * gate is defense-in-depth: reject a body where a device is clearly not a
+ * device (missing its identifying fields), not to re-enforce the SPA's rules.
+ */
+export const PlacedDeviceFileSchema = z
+  .object({
+    id: z.string().min(1, "Device id is required"),
+    device_type: z.string().min(1, "Device device_type is required"),
+    position: z.number(),
+    face: z.string().min(1, "Device face is required"),
+  })
+  .passthrough();
+
+// Minimal schema for extracting layout info and rejecting clearly malformed
+// bodies before they are persisted (#2449). The full schema validation happens
+// in the SPA against the richer src/lib/schemas LayoutSchema.
+export const LayoutFileSchema = z.object({
+  // No `.min(1)`: the prior schema was a bare `z.string()` that accepted an
+  // empty version, so keep accepting it (backward compatibility). Only the
+  // upper bound and charset are new (#2942).
+  version: z
+    .string()
+    .max(20, "Layout version must be 20 characters or less")
+    .regex(
+      NO_CONTROL_CHARS_PATTERN,
+      "Layout version must not contain control characters",
+    ),
+  name: z
+    .string()
+    .min(1, "Layout name is required")
+    .max(100, "Layout name must be 100 characters or less")
+    .regex(
+      NO_CONTROL_CHARS_PATTERN,
+      "Layout name must not contain control characters",
+    ),
+  /** Optional metadata section for new YAML format (#570, #915) */
+  metadata: LayoutYamlMetadataSchema.optional(),
+  racks: z
+    .array(
+      z
+        .object({
+          devices: z.array(PlacedDeviceFileSchema).optional().default([]),
+        })
+        .passthrough(),
+    )
+    .optional()
+    .default([]),
+});
+
+// Schema for layout ID (filename without extension)
+export const LayoutIdSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(
+    /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/,
+    "Layout ID must be lowercase alphanumeric with hyphens, not starting/ending with hyphen",
+  );
+
+// Layout list item returned by GET /api/layouts (with counts)
+// Layout list item returned by GET /api/layouts (with counts)
+// The id field is the layout's UUID from metadata.id (stable identity)
+export const LayoutListItemSchema = z.object({
+  id: z.string().regex(UUID_PATTERN, "Invalid UUID format"),
+  name: z.string(),
+  version: z.string(),
+  updatedAt: z.string().datetime(),
+  rackCount: z.number(),
+  deviceCount: z.number(),
+  valid: z.boolean().default(true), // false if YAML is corrupted
+});
+
+export type LayoutYamlMetadata = z.infer<typeof LayoutYamlMetadataSchema>;
+export type LayoutFile = z.infer<typeof LayoutFileSchema>;
+export type LayoutListItem = z.infer<typeof LayoutListItemSchema>;

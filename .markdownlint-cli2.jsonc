@@ -1,0 +1,14 @@
+// Markdownlint configuration for Rackula documentation
+// See: https://github.com/DavidAnson/markdownlint
+{
+  "config": {
+    // Line length: disabled. Prettier owns prose wrapping (proseWrap: "never"
+    // in prettier.config.js), so docs are one line per paragraph; a line-length
+    // rule would contradict that and is what caused docs to drift to ragged
+    // hand-wrapped lines.
+    "MD013": false,
+  },
+  // Vendored third-party skills are kept verbatim from their upstream source, so
+  // they are not held to this repo's markdown style. Refresh them from upstream.
+  "ignores": [".github/claude-plugins/**"],
+}

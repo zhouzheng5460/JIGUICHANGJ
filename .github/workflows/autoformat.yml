@@ -1,0 +1,201 @@
+name: Autoformat PRs
+
+# Runs prettier on every in-repo PR and commits the result back, so a
+# formatting-affecting dependency bump (e.g. a prettier minor bump) cannot
+# leave the repo failing the format:check gate in test.yml. See issue #2730.
+#
+# Security model (two jobs, so the write token never shares a job with
+# PR-controlled code):
+#   - "format" runs the PR-controlled code (npm ci, prettier config + plugins)
+#     with NO token (persist-credentials: false) and no secrets, so that code
+#     has nothing to steal. It emits the formatting changes as a patch artifact.
+#   - "push" holds AUTOFORMAT_PAT but runs no PR-controlled code: it clones the
+#     branch only to apply the patch and push. It does not use actions/checkout
+#     to lay down PR code in the privileged job.
+#
+# Artifact poisoning and patch validation (CodeQL actions/untrusted-checkout):
+# the artifact still crosses from the untrusted job into the privileged one, so
+# the push job treats format.patch as untrusted input and validates it before
+# applying, failing closed on anything it cannot check:
+#   - a 2 MB byte cap on format.patch;
+#   - a path allowlist built from `git apply --numstat -z`, so the patch may
+#     only touch extensions prettier actually formats;
+#   - `git apply --check` before the real apply.
+# The format job also skips the setup-node npm cache. GitHub already scopes
+# Actions caches so a PR branch cannot write into the default branch's cache
+# scope, so that is defence in depth, not the closure of a live path.
+# Residual risk, stated honestly: the allowlist blocks a patch that introduces
+# a new file type, but it does NOT block a malicious edit to an existing .ts
+# file. What carries that remainder is the fork gate below plus the fact that
+# same-repo PR authors already have write access to this repository.
+#
+# Setup required (one-time, by a maintainer): a fine-grained PAT stored under
+# the name AUTOFORMAT_PAT in BOTH secret stores:
+#   - Settings > Secrets and variables > Actions   (for human in-repo PRs)
+#   - Settings > Secrets and variables > Dependabot (for Dependabot PRs, which
+#     cannot read Actions secrets)
+# Required PAT permissions (repository, this repo only):
+#   - Contents: read and write   (commit and push)
+#   - Workflows: read and write  (GitHub rejects pushes that touch
+#     .github/workflows/* without this; prettier formats workflow YAML too)
+# The PAT (not the default GITHUB_TOKEN) is required because GITHUB_TOKEN pushes
+# do not re-trigger the validate workflow, so format:check would never re-run.
+# Until the secret exists the push job is a green no-op.
+
+on:
+  pull_request:
+    branches: [main]
+
+# Least privilege: the default GITHUB_TOKEN stays read-only. The push job writes
+# via AUTOFORMAT_PAT, not GITHUB_TOKEN, so no write scope is needed here.
+permissions:
+  contents: read
+
+concurrency:
+  group: autoformat-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    # Untrusted: runs PR-controlled code, so it gets no token. Skip forks too.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.fmt.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: false
+
+      # No `cache: "npm"` on purpose. This job runs PR-controlled code, and
+      # keeping it out of the Actions cache is defence in depth: GitHub already
+      # scopes caches so a PR branch cannot write into the default branch's
+      # cache scope, so this closes no live path, it just removes the shared
+      # mutable surface from the untrusted job.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+
+      - run: npm ci --ignore-scripts
+
+      - id: fmt
+        run: |
+          npm run format
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Already prettier-clean; nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git diff > "$GITHUB_WORKSPACE/format.patch"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.fmt.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: format-patch
+          path: format.patch
+          retention-days: 1
+
+  push:
+    # Privileged: holds AUTOFORMAT_PAT but runs no PR-controlled code. It clones
+    # the branch only to apply the patch from the untrusted job, then pushes.
+    needs: format
+    if: needs.format.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check AUTOFORMAT_PAT is configured
+        id: gate
+        env:
+          PAT: ${{ secrets.AUTOFORMAT_PAT }}
+        run: |
+          if [ -z "$PAT" ]; then
+            echo "AUTOFORMAT_PAT is not set; skipping (see workflow header for setup)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: format-patch
+
+      - name: Apply patch and push
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          PAT: ${{ secrets.AUTOFORMAT_PAT }}
+          HEAD_REF: ${{ github.head_ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          PATCH="$GITHUB_WORKSPACE/format.patch"
+
+          # format.patch is untrusted: it was produced by the job that ran
+          # PR-controlled code. Validate it before this privileged job applies
+          # it with a PAT that can write workflows. Fail closed throughout.
+
+          # 1. Byte cap. 2 MB (2097152 bytes) is far above any real prettier
+          # reformat of this tree and bounds the parsing work below.
+          MAX_PATCH_BYTES=2097152
+          PATCH_BYTES=$(wc -c < "$PATCH")
+          if [ "$PATCH_BYTES" -gt "$MAX_PATCH_BYTES" ]; then
+            echo "::error::format.patch is $PATCH_BYTES bytes, over the $MAX_PATCH_BYTES byte cap."
+            exit 1
+          fi
+
+          git clone --depth=1 --branch "$HEAD_REF" \
+            "https://x-access-token:${PAT}@github.com/${REPO}.git" work
+          cd work
+
+          # 2. Path allowlist. `git apply --numstat -z` enumerates every path
+          # the patch touches without applying it. -z emits raw NUL-terminated
+          # records (`added<TAB>deleted<TAB>path`), so there is no C-style
+          # quoting to unpick; renames arrive as a separate delete record and
+          # add record rather than the `a/x => b/y` arrow form, so both sides
+          # get checked. Any record that does not match that shape is rejected.
+          #
+          # The allowlist is the set of extensions `npm run format`
+          # (`prettier --write .`) actually formats in this tree: the
+          # lint-staged globs in package.json (js, ts, svelte, json, md, css,
+          # html) plus the extra parsers a whole-tree run claims (mjs, jsonc)
+          # and workflow YAML (yml, yaml), which is why the PAT needs Workflows
+          # write. Adding a newly formattable extension to the repo means
+          # adding it here too; until then the workflow fails rather than
+          # applying a patch it cannot vouch for.
+          git apply --numstat -z "$PATCH" > "$RUNNER_TEMP/numstat.z"
+          while IFS= read -r -d '' entry; do
+            if [[ ! "$entry" =~ ^([0-9]+|-)$'\t'([0-9]+|-)$'\t'(.+)$ ]]; then
+              echo "::error::Refusing patch: unparseable git apply --numstat record: $entry"
+              exit 1
+            fi
+            path="${BASH_REMATCH[3]}"
+            case "$path" in
+              /* | ../* | */../* | *$'\n'*)
+                echo "::error::Refusing patch: suspicious path: $path"
+                exit 1
+                ;;
+            esac
+            case "$path" in
+              *.js | *.mjs | *.ts | *.svelte | *.json | *.jsonc | *.md | *.css | *.html | *.yml | *.yaml) ;;
+              *)
+                echo "::error::Refusing patch: touches $path, outside the prettier extension allowlist."
+                exit 1
+                ;;
+            esac
+            echo "Allowed: $path"
+          done < "$RUNNER_TEMP/numstat.z"
+
+          # 3. Dry run before the real apply.
+          git apply --check "$PATCH"
+
+          git apply "$PATCH"
+          if git diff --quiet; then
+            echo "Patch applied to no effect; nothing to commit."
+            exit 0
+          fi
+          git config user.name "rackula-format-bot"
+          git config user.email "rackula-format-bot@users.noreply.github.com"
+          git commit -s -am "chore: prettier auto-format"
+          git push

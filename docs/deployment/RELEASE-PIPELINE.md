@@ -1,0 +1,121 @@
+# Release Pipeline
+
+Rackula releases run through a gated pipeline: stage, gate, then promote. A tagged release is not served to `latest` consumers until it passes validation on its real targets. Implemented in `.github/workflows/release.yml` (issue #1977).
+
+## Why
+
+Previously a tag push published `latest` everywhere (Docker `:latest`, GitHub latest, LXC `fetch_and_deploy latest`, prod) in parallel with no functional gate, and the only smoke test ran after prod was already live. A broken build (v26.6.2 on unprivileged LXC, #1969) reached downstream before anyone noticed. The gated pipeline validates the actual artifacts before anything becomes `latest`.
+
+## Flow
+
+1. Stage (automatic on tag push `v*`)
+   - `gh release create <tag> --prerelease`. Prereleases are excluded from `/releases/latest`, so LXC `fetch_and_deploy latest` does not pick them up yet.
+   - Build the LXC tarball plus a matching `rackula-lxc-<tag>.tar.gz.sha256` and attach both to the prerelease. The `.sha256` file is `sha256sum -c` compatible (one line: hash, two spaces, bare filename) and is generated from the exact uploaded tarball.
+   - Build and push Docker images with immutable tags only: `:X.Y.Z`, `:vX.Y.Z-persist`, and api `:X.Y.Z`. No `:latest`. No prod deploy.
+   - Scan every published image with Trivy (`scan-images` in `.github/workflows/build-images.yml`). A fixable HIGH or CRITICAL CVE fails the scan, which fails staging, which blocks gate and promote. See [Trivy image gate](#trivy-image-gate).
+2. Gate (automatic, fail closed)
+   - Docker gate (GitHub-hosted): `docker compose up` the `:X.Y.Z` image, check `/` 200, then the persist profile (persist frontend + api sidecar) and check `/api/health` 200.
+   - LXC gate (self-hosted `ci-runner` on the non-prod Proxmox host pve-rusty): download both the staged tarball and its `.sha256` from the release, verify integrity with `sha256sum -c` (the post-upload checksum check), then run `scripts/lxc-smoke-test.sh` on a throwaway unprivileged CT. A checksum mismatch fails the gate.
+   - Any gate failure stops the run. Nothing is promoted. Downstream `latest` consumers keep the prior good version (automatic rollback, because `latest` is never overwritten until promote).
+3. Promote (only if all gates pass, behind the `prod` Environment)
+   - A maintainer approves the `prod` Environment (single approval choke point).
+   - Docker: retag the gated digest to `:latest` and `:YY.M` (by digest, never a rebuild).
+   - GitHub: `gh release edit <tag> --prerelease=false --latest=true`.
+   - Prod: upload the build as a new Cloudflare Worker version, smoke it on the per-version preview URL, and only then shift traffic to it.
+
+## Operator actions
+
+Cutting a release (use the `/release` skill, which computes the CalVer version, updates CHANGELOG.md, tags, and pushes). Before tagging, resolve any open Security Triage PRs that change `.trivyignore` (see [Before tagging](#before-tagging)). After the tag is pushed:
+
+1. Watch the run: `gh run watch` or the Actions tab. Stage and gate run automatically.
+2. When gates pass, the `prod` Environment requests approval. Review the gate results, then approve to promote. Until you approve, the release stays a prerelease and nothing is live on `latest`.
+3. If a gate fails, the release stays a prerelease. Fix forward (new tag) or investigate. The prior `latest` is untouched.
+
+## Consumer fetch path
+
+LXC installs fetch the tarball from the release asset, not from a build artifact. Both `deploy/lxc/community-scripts/install/rackula-install.sh` and the `ct/rackula.sh` update flow call `fetch_and_deploy_gh_release "rackula" "RackulaLives/Rackula" "prebuild" "latest" "/opt/rackula" "rackula-lxc-*.tar.gz"`, which resolves the matching asset on the latest (promoted) GitHub release. Because each release publishes `rackula-lxc-<tag>.tar.gz.sha256` alongside the tarball, the fetch helper can verify the download against the published checksum before deploying.
+
+## The prerelease window
+
+Between the tag push and your approval, the release exists as a public prerelease (visible at `/releases/tag/<tag>`) with the tarball attached, but it is not `latest`. This is the validation window. It is normal for a release to sit here until gates finish and you approve.
+
+## Emergency gate override
+
+`workflow_dispatch` exposes `gate_override`. It skips the gates but deliberately does NOT auto-promote: the release stays a prerelease and the skip is logged. To ship an override release you must still promote it manually after your own verification:
+
+```bash
+# after manual verification of the staged :X.Y.Z artifacts.
+# Retag by digest (same as the automated promote-docker) so :latest points at the
+# exact image you verified, not whatever :X.Y.Z resolves to later.
+digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' ghcr.io/rackulalives/rackula:X.Y.Z)"
+docker buildx imagetools create --tag ghcr.io/rackulalives/rackula:latest \
+  "ghcr.io/rackulalives/rackula@${digest}"   # repeat for -api and persist
+gh release edit vX.Y.Z --prerelease=false --latest=true
+```
+
+Prefer fixing forward over overriding.
+
+## Trivy image gate
+
+`scan-images` in `.github/workflows/build-images.yml` scans every published release image (frontend, persist, api) for fixable HIGH and CRITICAL CVEs, with `ignore-unfixed: true` so findings with no available fix never block a release on their own. The scan runs `exit-code: 1`: a fixable finding fails the job, which fails `stage-docker`, which blocks `gate-docker` and every job downstream of it, so nothing promotes. This matches the fail-closed model the rest of the pipeline already follows for the docker and LXC gates.
+
+Findings still upload to the Security tab (`Upload scan results` runs with `if: always()`), so a blocked release leaves a normal SARIF trail for triage even though the job itself failed.
+
+### Exceptions: .trivyignore
+
+`.trivyignore` at the repo root is the only sanctioned way to exclude a finding from the gate. It is checked out at the release tag before the scan runs, so a release is evaluated against the exceptions committed at that tag, not against whatever is on `main` later.
+
+Every entry requires:
+
+- the CVE id, or the GHSA id for an advisory without one
+- an `exp:YYYY-MM-DD` expiry on the same line, 90 days out by default
+- a comment explaining why it is unfixable upstream or an accepted risk
+- a link to the accepted-risk discussion (the Code Scanning alert, or an issue or PR) that recorded the decision
+
+`scripts/check-trivyignore.sh` enforces this: `scan-images` runs it before the scan and the `validate` PR check runs it too. An entry fails if its first field is not a CVE or GHSA id, if its `exp:` date is missing or not a real date, or if the comment lines directly above it lack a reason line in the form `# <package> in the <image> image: <reason>` or a link to a Code Scanning alert, issue, or PR in this repository.
+
+After its `exp:` date, Trivy stops applying an entry and the gate fails on that CVE again, so accepted risk is re-reviewed instead of carried forward. Trivy also skips an entry whose date does not parse, which fails closed the same way.
+
+Do not add an entry to unblock a release without that discussion first. If a fix becomes available upstream, remove the entry rather than leaving it stale; the weekly `trivy.yml` scan and the monthly `rebuild-images.yml` OS-patch rescan will keep surfacing it as a reminder if you don't.
+
+### Dismissals do not unblock the gate
+
+The gate reads only `.trivyignore`, never Code Scanning alert state. Dismissing an alert in the Security tab, as a false positive or as `won't fix`, does not stop that CVE from failing a release. v26.8.0 was blocked this way by an alert dismissed a week earlier (#3231).
+
+When Security Triage dismisses a container-image finding, the dismissal comment links what covers the CVE at the gate. If an unexpired `.trivyignore` entry for that exact id is already on `main`, triage cites it and opens no PR. If an open PR already adds the entry, triage reuses that PR. Otherwise it first opens a draft PR on `fix/security-<alert-number>` that adds the entry, and merging that PR is the decision that lets the gate pass. See [Release-gated image findings](SECURITY-TRIAGE.md#release-gated-image-findings). If you dismiss a release image alert yourself, add the entry in a PR as well.
+
+### Before tagging
+
+List open triage PRs that change `.trivyignore`:
+
+```bash
+gh pr list --label security --label automated --state open --json number,title,files \
+  --jq '.[] | select(any(.files[]; .path == ".trivyignore")) | "#\(.number) \(.title)"'
+```
+
+Decide each one before you tag: merge it to accept the entry, or close it and fix the finding. The gate reads `.trivyignore` at the tag, so an entry merged after tagging does not apply to that release.
+
+### Finding the alert behind a failed scan
+
+Image scans run against the tag ref, and their alerts are recorded there under a per-version category such as `trivy-ghcr.io-rackulalives-rackula-api-26.8.0`. The alerts API lists the default branch unless you pass a `ref`, so these alerts are missing from a plain listing, and Security Triage (which works on `main`) never sees them. Query the tag ref with `state=all`, which also returns dismissed alerts:
+
+```bash
+gh api "repos/RackulaLives/Rackula/code-scanning/alerts?ref=refs/tags/<tag>&tool_name=Trivy&state=all&per_page=100" \
+  --jq '.[] | "\(.number) \(.state) \(.rule.id) \(.most_recent_instance.category)"'
+```
+
+## Smoke test visibility
+
+`smoke-test` in `deploy-dev.yml` runs the deployed app through Playwright once the dev deploy completes. It needs a Cloudflare Access service token (`CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`) because d.racku.la sits behind Cloudflare Access; without it every request only reaches the login wall (#2346). Rather than let those requests fail (or silently no-op inside a job that still reports success), a preceding `check-cf-access` job checks secret availability and publishes it as an output. `smoke-test` has a job-level `if:` on that output, so when the token is unavailable the job's conclusion is `skipped`, visibly distinct from a passed run in the Actions summary, and the gate step also emits an `::notice::` and a `$GITHUB_STEP_SUMMARY` line explaining why. This does not change when the smoke test is skipped, only how the skip is reported.
+
+`deploy-prod.yml` needs no equivalent skip: count.racku.la is public (#3094) and the Cloudflare credentials are always present during promote. Its smoke is fail-closed and runs twice, first against the per-version preview URL before any traffic moves, then against the live host. It runs on `ubuntu-latest`; prod left the self-hosted runner with #2029.
+
+## Upgrade-gate baseline
+
+The LXC gate can run in upgrade mode (`--mode both --baseline <tarball>`). The baseline must be the last KNOWN-GOOD release, not `latest`. For the bootstrap release v26.6.3 the gate runs deploy-only (`--mode deploy`) because the prior `latest` (v26.6.2) is broken. From v26.6.4 onward, pass the previous good release tarball as the baseline.
+
+## Dependencies
+
+- The `prod` GitHub Environment with a required reviewer (repo settings).
+- The self-hosted `ci-runner` (homelab-infra) online, advertising label `pve-rusty`, with `proxmox-smoke.env` and the CT SSH key installed.
+- The LXC gate's live run depends on the `lxc-smoke-test.sh` api-driver (#1982).

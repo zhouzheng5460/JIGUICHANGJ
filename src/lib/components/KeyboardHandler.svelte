@@ -1,0 +1,152 @@
+<!--
+  KeyboardHandler component
+  Handles global keyboard shortcuts for the application
+-->
+<script lang="ts">
+  import { shouldIgnoreKeyboard } from "$lib/utils/keyboard";
+  import { findActionForEvent } from "$lib/actions/registry";
+  import {
+    createActionDispatch,
+    isCommandPaletteShortcut,
+  } from "$lib/actions/dispatch";
+  import { getWorkspaceStore } from "$lib/stores/workspace.svelte";
+  import { dialogStore } from "$lib/stores/dialogs.svelte";
+  import { getLayoutStore } from "$lib/stores/layout.svelte";
+  import { getPlacementStore } from "$lib/stores/placement.svelte";
+  import { getConnectionCreationStore } from "$lib/stores/connection-creation.svelte";
+  import { getCanvasStore } from "$lib/stores/canvas.svelte";
+  import { getToastStore } from "$lib/stores/toast.svelte";
+  import {
+    createPlacementKeyboardController,
+    focusRackContainer,
+  } from "$lib/utils/placement-keyboard-controller";
+
+  const workspace = getWorkspaceStore();
+  const dispatch = createActionDispatch();
+
+  const layoutStore = getLayoutStore();
+  const placementStore = getPlacementStore();
+  const connectionCreationStore = getConnectionCreationStore();
+  const canvasStore = getCanvasStore();
+  const toastStore = getToastStore();
+
+  // Keyboard placement (#106): while a device is armed, arrow / Tab / Enter /
+  // Escape drive a U-slot cursor and place via the same store path as
+  // tap-to-place. Reads live store values through getters so one controller
+  // instance stays correct as racks and the armed device change.
+  const placementKeyboard = createPlacementKeyboardController({
+    getRacks: () => layoutStore.racks,
+    getDeviceLibrary: () => layoutStore.device_types,
+    // Prefer the rack the placement cursor is in: the pointer moves the cursor
+    // across racks as it hovers (#2992), and Enter/arrows must act on the rack
+    // whose ghost the user is looking at. Falls back to the active rack while
+    // no cursor is set (e.g. before the first hover or key press).
+    getActiveRackId: () =>
+      placementStore.targetRackId ?? layoutStore.activeRackId,
+    isPlacing: () => placementStore.isPlacing,
+    getPendingDevice: () => placementStore.pendingDevice,
+    getTargetFace: () => placementStore.targetFace,
+    getCursorPosition: () => placementStore.cursorPosition,
+    setActiveRack: (id) => layoutStore.setActiveRack(id),
+    setCursor: (rackId, position) => placementStore.setCursor(rackId, position),
+    announce: (text) => placementStore.announcePosition(text),
+    cancelPlacement: () => placementStore.cancelPlacement(),
+    abandonPlacement: () => placementStore.abandonPlacement(),
+    placeDevice: (rackId, slug, position, face) =>
+      layoutStore.placeDeviceSmart(rackId, slug, position, face),
+    completePlacement: (summary) => placementStore.completePlacement(summary),
+    showToast: (message) => toastStore.showToast(message, "warning", 3000),
+    onPlaced: () =>
+      canvasStore.fitAll(layoutStore.racks, layoutStore.rack_groups),
+    // Move focus to the newly focused rack so the visible focus ring follows the
+    // cursor across a Tab/arrow rack switch.
+    onFocusRack: (rackId) => focusRackContainer(rackId),
+  });
+
+  /**
+   * Alt+1-9 jumps to the Nth open layout tab. Keyed off event.code (Digit1..9)
+   * rather than event.key because macOS remaps Alt+digit to a symbol (Alt+1
+   * yields the character produced by that key, not "1"). Returns true when the
+   * event was a tab-jump so the caller can stop processing.
+   */
+  function handleTabJump(event: KeyboardEvent): boolean {
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+      return false;
+    }
+    const match = /^Digit([1-9])$/.exec(event.code);
+    if (!match) return false;
+
+    event.preventDefault();
+    const index = Number(match[1]) - 1;
+    const tab = workspace.tabs[index];
+    if (tab) {
+      workspace.switchTo(tab.id);
+    }
+    return true;
+  }
+
+  /**
+   * Right-click cancels connection-creation mode (#1932) anywhere it is not
+   * already handled by a more specific target. RackDevice's own context menu
+   * handler covers a right-click on a device body or a port (it stops
+   * propagation before this window listener would see it); this covers
+   * right-clicking empty rack space or canvas chrome instead.
+   */
+  function handleContextMenu(event: MouseEvent) {
+    if (!connectionCreationStore.isCreating) return;
+    event.preventDefault();
+    connectionCreationStore.cancelConnection();
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    // Palette shortcut fires even from a text field, and before any other
+    // handling. It is the first special-case to run before shouldIgnoreKeyboard.
+    // Cmd/Ctrl+K toggles the palette: it closes it when already open, otherwise
+    // opens it (#2777).
+    if (isCommandPaletteShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (dialogStore.isOpen("commandPalette")) {
+        dialogStore.close();
+      } else {
+        dialogStore.open("commandPalette");
+      }
+      return;
+    }
+
+    // While the palette is open the global handler is inert: the Dialog owns
+    // Escape and the Command input owns typing.
+    if (dialogStore.isOpen("commandPalette")) return;
+
+    // Ignore if in input field
+    if (shouldIgnoreKeyboard(event)) return;
+
+    // Escape cancels connection-creation mode (#1932), mirroring right-click.
+    if (connectionCreationStore.isCreating && event.key === "Escape") {
+      event.preventDefault();
+      connectionCreationStore.cancelConnection();
+      return;
+    }
+
+    // Keyboard placement (#106) owns arrow / Tab / Enter / Escape while a device
+    // is armed, so it runs before the action registry (which binds arrows to
+    // move-device and Escape to clear-selection). It only consumes keys while
+    // placing; otherwise it returns false and handling continues as normal.
+    if (placementKeyboard.handleKeyDown(event)) {
+      event.preventDefault();
+      return;
+    }
+
+    // Workspace tab jumps (Alt+1-9) are dynamic, not fixed registry actions, so
+    // they take precedence over the action registry.
+    if (handleTabJump(event)) return;
+
+    const action = findActionForEvent(event);
+    if (!action) return;
+
+    event.preventDefault();
+    dispatch[action.id]?.();
+  }
+</script>
+
+<svelte:window onkeydown={handleKeyDown} oncontextmenu={handleContextMenu} />

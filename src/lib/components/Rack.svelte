@@ -1,0 +1,779 @@
+<!--
+  Rack SVG Component
+  Orchestrates sub-components for rack visualisation and interaction.
+
+  Sub-components:
+  - RackFrame: static frame (rails, grid, labels, blocked slots)
+  - RackDropZone: drop preview indicator
+  - RackChristmasHat: seasonal easter egg
+
+  Logic modules:
+  - rack-drop-coordinator: drop target resolution pipeline
+  - rack-drop-handlers: drop action event dispatch
+  - rack-interaction-handlers: native DnD + touch event handlers
+  - rack-pointer-drag: custom pointer drag listeners (Safari fix)
+  - rack-context-actions: device context menu actions
+  - rack-context-menu-handlers: context menu UI delegation
+-->
+<script lang="ts">
+  import type {
+    Rack as RackType,
+    DeviceType,
+    DeviceFace,
+    DisplayMode,
+    PlacedDevice,
+  } from "$lib/types";
+  import RackDevice from "./RackDevice.svelte";
+  import ConnectionLayer from "./ConnectionLayer.svelte";
+  import RackFrame from "./RackFrame.svelte";
+  import RackDropZone from "./RackDropZone.svelte";
+  import RackChristmasHat from "./RackChristmasHat.svelte";
+  import DeviceContextMenu from "./DeviceContextMenu.svelte";
+  import {
+    getDropFeedback,
+    type ContainerHoverInfo,
+  } from "$lib/utils/dragdrop";
+  import { getToastStore } from "$lib/stores/toast.svelte";
+  import { getLayoutStore } from "$lib/stores/layout.svelte";
+  import { getSelectionStore } from "$lib/stores/selection.svelte";
+  import { getCanvasStore } from "$lib/stores/canvas.svelte";
+  import { getBlockedSlots } from "$lib/utils/blocked-slots";
+  import { isChristmas } from "$lib/utils/christmas";
+  import { getViewportStore } from "$lib/utils/viewport.svelte";
+  import { getPlacementStore } from "$lib/stores/placement.svelte";
+  import { validStartPositions } from "$lib/utils/placement-keyboard";
+  import { getConnectionCreationStore } from "$lib/stores/connection-creation.svelte";
+  import { getConnectionStore } from "$lib/stores/connection.svelte";
+  import { handleConnectionPortClick } from "$lib/utils/connection-creation";
+  import type { PortClickInfo } from "$lib/types";
+  import { SvelteSet, SvelteMap } from "svelte/reactivity";
+  import { fade } from "svelte/transition";
+  import { prefersReducedMotion } from "svelte/motion";
+  import {
+    U_HEIGHT_PX,
+    RAIL_WIDTH as RAIL_WIDTH_CONST,
+    getRackWidth,
+    getInteriorWidth,
+    BASE_RACK_PADDING as BASE_RACK_PADDING_CONST,
+    RACK_PADDING_HIDDEN,
+    NAME_Y_OFFSET as NAME_Y_OFFSET_CONST,
+  } from "$lib/constants/layout";
+  import { type RackDimensions } from "$lib/utils/rack-drop-coordinator";
+  import { createContextMenuActions } from "$lib/utils/rack-context-actions";
+  import { type RackEventCallbacks } from "$lib/utils/rack-drop-handlers";
+  import {
+    handleDragOver as onDragOver,
+    handleDragEnter as onDragEnter,
+    handleDragLeave as onDragLeave,
+    handleDrop as onDrop,
+    handleTouchEnd as onTouchEnd,
+    handlePlacementClick as onPlacementClick,
+    handlePlacementHover as onPlacementHover,
+    type RackHandlerContext,
+    type DropPreviewState,
+  } from "$lib/utils/rack-interaction-handlers";
+  import { attachPointerDragListeners } from "$lib/utils/rack-pointer-drag";
+  import { createContextMenuHandlers } from "$lib/utils/rack-context-menu-handlers";
+  import {
+    effectiveFace,
+    pendingCollisionFace,
+  } from "$lib/utils/effective-face";
+
+  const canvasStore = getCanvasStore();
+  const viewportStore = getViewportStore();
+  const placementStore = getPlacementStore();
+  const toastStore = getToastStore();
+  const layoutStore = getLayoutStore();
+  const selectionStore = getSelectionStore();
+  const connectionCreationStore = getConnectionCreationStore();
+  const connectionStore = getConnectionStore();
+
+  const showChristmasHats = isChristmas();
+  const DRAG_CLICK_DEBOUNCE_MS = 100;
+
+  interface Props {
+    rack: RackType;
+    deviceLibrary: DeviceType[];
+    selected: boolean;
+    /** Whether this rack is itself the selectable unit (role="listitem"). True
+     *  for standalone and bayed racks. False when an ancestor already carries the
+     *  selectable role (dual view wraps two faces under one listitem), so the
+     *  face renders as presentation to avoid nesting one listitem inside another. */
+    selectable?: boolean;
+    selectedDeviceId?: string | null;
+    displayMode?: DisplayMode;
+    showLabelsOnImages?: boolean;
+    faceFilter?: "front" | "rear";
+    viewLabel?: string;
+    hideRackName?: boolean;
+    hideULabels?: boolean;
+    partyMode?: boolean;
+    onselect?: (event: CustomEvent<{ rackId: string }>) => void;
+    ondeviceselect?: (
+      event: CustomEvent<{
+        deviceId?: string;
+        slug: string;
+        position: number;
+        face: "front" | "rear";
+      }>,
+    ) => void;
+    ondevicedrop?: (
+      event: CustomEvent<{
+        rackId: string;
+        slug: string;
+        position: number;
+      }>,
+    ) => void;
+    ondevicemove?: (
+      event: CustomEvent<{
+        rackId: string;
+        deviceIndex: number;
+        newPosition: number;
+      }>,
+    ) => void;
+    ondevicemoverack?: (
+      event: CustomEvent<{
+        sourceRackId: string;
+        sourceIndex: number;
+        targetRackId: string;
+        targetPosition: number;
+        face: DeviceFace;
+      }>,
+    ) => void;
+    onplacementtap?: (
+      event: CustomEvent<{ position: number; face: "front" | "rear" }>,
+    ) => void;
+  }
+
+  let {
+    rack,
+    deviceLibrary,
+    selected,
+    selectable = true,
+    selectedDeviceId = null,
+    displayMode = "label",
+    showLabelsOnImages = false,
+    faceFilter,
+    viewLabel,
+    hideRackName = false,
+    hideULabels = false,
+    partyMode = false,
+    onselect,
+    ondeviceselect,
+    ondevicedrop,
+    ondevicemove,
+    ondevicemoverack,
+    onplacementtap,
+  }: Props = $props();
+
+  // --- Drag state ---
+  let justFinishedDrag = $state(false);
+  let dragDebounceTimeout: ReturnType<typeof setTimeout> | null = null;
+  let svgElement: SVGSVGElement | null = $state(null);
+  let dropPreview = $state<DropPreviewState | null>(null);
+  let containerHoverInfo = $state<ContainerHoverInfo | null>(null);
+
+  // --- Context menu state ---
+  let contextMenuOpen = $state(false);
+  let contextMenuTarget = $state<{
+    rackId: string;
+    deviceIndex: number;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  // Cleanup timeout on unmount
+  $effect(() => {
+    return () => {
+      if (dragDebounceTimeout) {
+        clearTimeout(dragDebounceTimeout);
+        dragDebounceTimeout = null;
+      }
+    };
+  });
+
+  // Slug index rebuilt only when deviceLibrary changes; collapses O(D x L)
+  // proxy-trapped finds to O(D) map hits. Same pattern as AnnotationColumn.
+  const bySlug = $derived(new Map(deviceLibrary.map((dt) => [dt.slug, dt])));
+
+  // --- Utility lookups ---
+  function getDeviceBySlug(slug: string): DeviceType | undefined {
+    return bySlug.get(slug);
+  }
+
+  // --- Layout constants & derived dimensions ---
+  const U_HEIGHT = U_HEIGHT_PX;
+  const RAIL_WIDTH = RAIL_WIDTH_CONST;
+  const NAME_Y_OFFSET = NAME_Y_OFFSET_CONST;
+
+  const RACK_WIDTH = $derived(getRackWidth(rack.width));
+  const RACK_PADDING = $derived(
+    hideRackName ? RACK_PADDING_HIDDEN : BASE_RACK_PADDING_CONST,
+  );
+  const viewBoxYOffset = $derived(hideRackName ? 0 : NAME_Y_OFFSET);
+  const totalHeight = $derived(rack.height * U_HEIGHT);
+  const viewBoxHeight = $derived(RACK_PADDING + RAIL_WIDTH * 2 + totalHeight);
+  const interiorWidth = $derived(getInteriorWidth(RACK_WIDTH));
+  const effectiveFaceFilter = $derived(faceFilter ?? rack.view);
+
+  const rackDims = $derived<RackDimensions>({
+    rackHeight: rack.height,
+    rackWidth: RACK_WIDTH,
+    interiorWidth,
+    uHeight: U_HEIGHT,
+    rackPadding: RACK_PADDING,
+    railWidth: RAIL_WIDTH,
+  });
+
+  const eventCallbacks = $derived<RackEventCallbacks>({
+    ondevicemove,
+    ondevicemoverack,
+    ondevicedrop,
+  });
+
+  // --- Context menu & action helpers ---
+  const contextActions = createContextMenuActions(
+    layoutStore,
+    selectionStore,
+    toastStore,
+  );
+
+  const ctxMenu = createContextMenuHandlers(
+    contextActions,
+    () => ({ open: contextMenuOpen, target: contextMenuTarget }),
+    (s) => {
+      contextMenuOpen = s.open;
+      contextMenuTarget = s.target;
+    },
+  );
+
+  // --- Derived data for rendering ---
+  const uLabels = $derived(
+    Array.from({ length: rack.height }, (_, i) => {
+      const startUnit = rack.starting_unit ?? 1;
+      const uNumber = rack.desc_units
+        ? startUnit + i
+        : startUnit + (rack.height - 1) - i;
+      const yPosition = i * U_HEIGHT + U_HEIGHT / 2 + RACK_PADDING + RAIL_WIDTH;
+      return { uNumber, yPosition };
+    }),
+  );
+
+  const visibleDevices = $derived(
+    rack.devices
+      .map((placedDevice, originalIndex) => ({ placedDevice, originalIndex }))
+      .filter(({ placedDevice }) => {
+        if (placedDevice.container_id) return false;
+        const ef = effectiveFace(
+          placedDevice,
+          bySlug.get(placedDevice.device_type),
+        );
+        return ef === "both" || ef === effectiveFaceFilter;
+      }),
+  );
+
+  // Devices this rack/face actually renders, for ConnectionLayer (#1931) to
+  // anchor connection endpoints against. Same set RackDevice renders from
+  // visibleDevices, kept as its own derived so ConnectionLayer only
+  // recomputes when the rendered device set itself changes.
+  const connectionDevices = $derived(
+    visibleDevices.map(({ placedDevice }) => placedDevice),
+  );
+
+  const containerChildren = $derived.by(() => {
+    const map = new SvelteMap<
+      string,
+      Array<{ placedDevice: PlacedDevice; originalIndex: number }>
+    >();
+    rack.devices.forEach((pd, idx) => {
+      if (!pd.container_id) return;
+      const ef = effectiveFace(pd, bySlug.get(pd.device_type));
+      if (ef !== "both" && ef !== effectiveFaceFilter) return;
+      const children = map.get(pd.container_id) ?? [];
+      children.push({ placedDevice: pd, originalIndex: idx });
+      map.set(pd.container_id, children);
+    });
+    return map;
+  });
+
+  const blockedSlots = $derived(
+    faceFilter ? getBlockedSlots(rack, faceFilter, deviceLibrary) : [],
+  );
+  // Placement is armed by the mobile tap-to-place flow and the desktop command
+  // palette "Add device" path (#2214/#2352) alike, so the cue surfaces on every
+  // viewport. Touch placement is completed by `ontouchend`; pointer placement by
+  // `handleClick` -> handlePlacementClick, both reading the same store.
+  const isPlacementMode = $derived(placementStore.isPlacing);
+
+  const validPlacementSlots = $derived.by(() => {
+    if (!isPlacementMode || !placementStore.pendingDevice)
+      return new SvelteSet<number>();
+    const device = placementStore.pendingDevice;
+    const deviceHeight = device.u_height;
+    // Reuse the keyboard cursor's valid-start scan so the highlight and the
+    // keyboard cursor agree by construction; expand each valid start into the
+    // U-slots the device would occupy.
+    const validSlots = new SvelteSet<number>();
+    for (const startU of validStartPositions(
+      rack,
+      deviceLibrary,
+      device,
+      effectiveFaceFilter,
+    )) {
+      for (let u = startU; u < startU + deviceHeight; u++) validSlots.add(u);
+    }
+    return validSlots;
+  });
+
+  // Keyboard-placement cursor preview (#106). When the keyboard cursor is in
+  // this rack, surface it through the same drop-preview rectangle the drag/tap
+  // flow uses, so the keyboard preview is visually identical. The pointer
+  // `dropPreview` takes precedence while a drag is active; otherwise this drives
+  // the preview.
+  const keyboardCursorPreview = $derived.by<DropPreviewState | null>(() => {
+    if (!isPlacementMode || !placementStore.pendingDevice) return null;
+    if (placementStore.targetRackId !== rack.id) return null;
+    // Keyboard placement targets one face (placementStore.targetFace). In dual
+    // view the same rack renders a front and a rear Rack; only the face being
+    // placed onto should show the cursor, so the preview matches where the
+    // device actually lands.
+    if (effectiveFaceFilter !== placementStore.targetFace) return null;
+    const position = placementStore.cursorPosition;
+    if (position == null) return null;
+    const { u_height: deviceHeight } = placementStore.pendingDevice;
+    return {
+      position,
+      height: deviceHeight,
+      feedback: getDropFeedback(
+        rack,
+        deviceLibrary,
+        deviceHeight,
+        position,
+        undefined,
+        // Widen a full-depth pending device to both faces so the keyboard
+        // preview matches the store's placement (#2925); see pendingCollisionFace.
+        pendingCollisionFace(placementStore.pendingDevice, effectiveFaceFilter),
+      ),
+    };
+  });
+
+  // The active preview: a live pointer drag wins; otherwise the keyboard cursor.
+  const activePreview = $derived(dropPreview ?? keyboardCursorPreview);
+
+  // resolveDropTarget mints a fresh { position, height, feedback } object on
+  // every pointermove/dragover; assigning it unconditionally wakes the derived
+  // graph (activePreview + every isDropTarget) on each pixel even when the
+  // resolved slot has not changed. Skip the write when all three fields match
+  // the current preview; null (clear) always passes through.
+  function setDropPreviewIfChanged(p: DropPreviewState | null): void {
+    if (p === null) {
+      dropPreview = null;
+      return;
+    }
+    const cur = dropPreview;
+    if (
+      cur !== null &&
+      cur.position === p.position &&
+      cur.height === p.height &&
+      cur.feedback === p.feedback
+    ) {
+      return;
+    }
+    dropPreview = p;
+  }
+
+  // --- Handler context for extracted interaction handlers ---
+  const handlerCtx = $derived<RackHandlerContext>({
+    getRack: () => rack,
+    getDeviceLibrary: () => deviceLibrary,
+    getRackDims: () => rackDims,
+    getFaceFilter: () => effectiveFaceFilter,
+    getSelectedDeviceId: () => selectedDeviceId,
+    getEventCallbacks: () => eventCallbacks,
+    setDropPreview: setDropPreviewIfChanged,
+    setContainerHoverInfo: (i) => {
+      containerHoverInfo = i;
+    },
+    layoutStore,
+    toastStore,
+  });
+
+  // --- Drag debounce helper ---
+  function setDragFinished() {
+    justFinishedDrag = true;
+    if (dragDebounceTimeout) clearTimeout(dragDebounceTimeout);
+    dragDebounceTimeout = setTimeout(() => {
+      justFinishedDrag = false;
+      dragDebounceTimeout = null;
+    }, DRAG_CLICK_DEBOUNCE_MS);
+  }
+
+  // --- Custom pointer drag listeners (Safari #397 fix) ---
+  $effect(() => {
+    return attachPointerDragListeners({
+      getSvgElement: () => svgElement,
+      getRack: () => rack,
+      getDeviceLibrary: () => deviceLibrary,
+      getRackDims: () => rackDims,
+      getFaceFilter: () => effectiveFaceFilter,
+      getSelectedDeviceId: () => selectedDeviceId,
+      getEventCallbacks: () => eventCallbacks,
+      setDropPreview: setDropPreviewIfChanged,
+      setContainerHoverInfo: (i) => {
+        containerHoverInfo = i;
+      },
+      onDragFinished: setDragFinished,
+      layoutStore,
+      toastStore,
+    });
+  });
+
+  /**
+   * Handle a click on the rack container.
+   *
+   * Clicks synthesised at the end of a pan/drag gesture are ignored first
+   * (`isPanning` stays true for ~50ms after `panend`), so neither placement nor
+   * selection fires unintentionally after a pan. Then a click while placing
+   * completes mouse/pointer click-to-place (#1757/#2352) on any viewport:
+   * desktop browsers do not synthesise TouchEvents for a mouse, so without this
+   * a pointer user (mobile tap-to-place or the desktop palette "Add device"
+   * path) could pick a device but never place it. Touch input is handled
+   * separately by the SVG's `ontouchend`. Otherwise the click selects the rack.
+   */
+  function handleClick(event: MouseEvent) {
+    if (canvasStore.isPanning) return;
+    if (justFinishedDrag) {
+      justFinishedDrag = false;
+      return;
+    }
+    if (placementStore.isPlacing) {
+      const device = placementStore.pendingDevice;
+      if (device && svgElement) {
+        onPlacementClick(event, svgElement, handlerCtx, device, onplacementtap);
+      }
+      return;
+    }
+    onselect?.(new CustomEvent("select", { detail: { rackId: rack.id } }));
+  }
+
+  /**
+   * Track the pointer while click/tap-to-place is armed (#2992): the placement
+   * cursor (and so the ghost preview) follows the mouse, showing where a click
+   * would land. Skipped while panning so a pan gesture over the rack does not
+   * drag the cursor along. handlePlacementHover's writes are same-value no-ops
+   * until the resolved U changes, so this per-pixel handler stays cheap.
+   */
+  function handlePointerMove(event: PointerEvent) {
+    if (!placementStore.isPlacing || canvasStore.isPanning) return;
+    const device = placementStore.pendingDevice;
+    if (!device || !svgElement) return;
+    onPlacementHover(event, svgElement, handlerCtx, device, placementStore);
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    // During keyboard placement the global handler owns Enter/Space (it places
+    // the armed device), so don't also select the rack from here.
+    if (placementStore.isPlacing) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onselect?.(new CustomEvent("select", { detail: { rackId: rack.id } }));
+    }
+  }
+
+  /**
+   * Route a port click through connection-creation mode (#1932): the first
+   * click on a port arms the mode with it as source, the second click on a
+   * different port validates and creates the connection. Delegates to the
+   * pure handler in connection-creation.ts so the state machine and
+   * validation/warning surfacing are unit-testable without mounting Rack.
+   * Placement mode owns the click gesture while armed (isPlacementActive),
+   * so a port click is a no-op there rather than also arming connection
+   * creation on top of an active placement.
+   */
+  function handlePortClick(info: PortClickInfo) {
+    handleConnectionPortClick(info, {
+      connectionCreation: connectionCreationStore,
+      isPlacementActive: placementStore.isPlacing,
+      validateConnection: connectionStore.validateConnection,
+      addConnection: connectionStore.addConnection,
+      showToast: (message, type) => toastStore.showToast(message, type, 4000),
+    });
+  }
+</script>
+
+<!-- The rack is a list item that holds interactive devices, so it is a
+     non-interactive role="listitem" container, not an interactive role="option"
+     (an option may not contain focusable descendants: nested-interactive, #2255).
+     It stays a focus stop (tabindex) for rack-level selection, with the active
+     rack announced via aria-current. The analyzer cannot correlate the dynamic
+     tabindex with the role, so the noninteractive-tabindex warning is a false
+     positive here. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<div
+  class="rack-container"
+  class:selected
+  class:party-mode={partyMode}
+  class:placement-mode={isPlacementMode}
+  tabindex={selectable ? 0 : undefined}
+  aria-current={selectable && selected ? "true" : undefined}
+  role={selectable ? "listitem" : "presentation"}
+  onkeydown={handleKeyDown}
+  onclick={handleClick}
+>
+  <svg
+    bind:this={svgElement}
+    class="rack-svg"
+    width={RACK_WIDTH}
+    height={viewBoxHeight + viewBoxYOffset}
+    viewBox="0 -{viewBoxYOffset} {RACK_WIDTH} {viewBoxHeight + viewBoxYOffset}"
+    role="group"
+    aria-label="{rack.name}, {rack.height}U rack{selected ? ', selected' : ''}"
+    ondragover={(e) => onDragOver(e, handlerCtx)}
+    ondragenter={onDragEnter}
+    ondragleave={(e) => onDragLeave(e, handlerCtx)}
+    ondrop={(e) => onDrop(e, handlerCtx)}
+    onpointermove={handlePointerMove}
+    ontouchend={(e) => {
+      if (!viewportStore.isMobile || !placementStore.isPlacing) return;
+      // Don't place when a pan gesture just ended over the rack.
+      if (canvasStore.isPanning) return;
+      const device = placementStore.pendingDevice;
+      if (!device) return;
+      onTouchEnd(e, handlerCtx, device, onplacementtap);
+    }}
+    style="overflow: visible"
+  >
+    <!-- Layer 1: Static rack frame -->
+    <RackFrame
+      rackId={rack.id}
+      rackWidth={RACK_WIDTH}
+      {interiorWidth}
+      railWidth={RAIL_WIDTH}
+      formFactor={rack.form_factor}
+      rackPadding={RACK_PADDING}
+      uHeight={U_HEIGHT}
+      {totalHeight}
+      rackHeight={rack.height}
+      {uLabels}
+      {hideULabels}
+      {hideRackName}
+      rackName={rack.name}
+      {viewLabel}
+      nameYOffset={NAME_Y_OFFSET}
+      {blockedSlots}
+      dropPreview={activePreview}
+      {isPlacementMode}
+      {validPlacementSlots}
+    />
+
+    <!-- Layer 2: Devices -->
+    <g transform="translate(0, {RACK_PADDING + RAIL_WIDTH})">
+      {#each visibleDevices as { placedDevice, originalIndex } (placedDevice.id)}
+        {@const device = getDeviceBySlug(placedDevice.device_type)}
+        {@const children = containerChildren.get(placedDevice.id) ?? []}
+        <!-- Transition wrapper must sit directly in the each item: local
+             transitions only play when their own block is created/destroyed,
+             so inside the if it would never fire on place/delete, and being
+             local it correctly skips initial mount and tab switches. -->
+        <g
+          transition:fade={{
+            duration: prefersReducedMotion.current ? 0 : 150,
+          }}
+        >
+          {#if device}
+            {@const isHoveredContainer =
+              containerHoverInfo?.containerId === placedDevice.id}
+            <RackDevice
+              {device}
+              position={placedDevice.position}
+              rackHeight={rack.height}
+              rackId={rack.id}
+              deviceIndex={originalIndex}
+              selected={selectedDeviceId === placedDevice.id}
+              uHeight={U_HEIGHT}
+              rackWidth={RACK_WIDTH}
+              {displayMode}
+              rackView={effectiveFaceFilter}
+              {showLabelsOnImages}
+              placedDeviceName={placedDevice.name}
+              placedDeviceId={placedDevice.id}
+              ports={placedDevice.ports}
+              frontImageRef={placedDevice.front_image}
+              rearImageRef={placedDevice.rear_image}
+              colourOverride={placedDevice.colour_override}
+              {deviceLibrary}
+              containerChildDevices={children}
+              selectedChildId={selectedDeviceId}
+              isDragOverContainer={isHoveredContainer}
+              dragTargetSlotId={isHoveredContainer
+                ? (containerHoverInfo?.targetSlotId ?? null)
+                : null}
+              isDragTargetValid={isHoveredContainer &&
+                (containerHoverInfo?.isValidTarget ?? false)}
+              onselect={ondeviceselect}
+              onPortClick={handlePortClick}
+              ondragend={() => setDragFinished()}
+              onduplicate={(e) =>
+                contextActions.handleDuplicate(rack, {
+                  ...e.detail,
+                  x: 0,
+                  y: 0,
+                })}
+              oncontextmenuopen={ctxMenu.handleOpen}
+            />
+          {/if}
+        </g>
+      {/each}
+    </g>
+
+    <!-- Layer 2b: Connections, drawn above every device body (#1931) -->
+    <ConnectionLayer
+      devices={connectionDevices}
+      {deviceLibrary}
+      rackView={effectiveFaceFilter}
+      {rackDims}
+    />
+
+    <!-- Empty-state hint: only in a face-filtered (dual) view, so an empty rear
+         reads as "nothing rear-facing here" rather than looking broken. -->
+    {#if faceFilter && visibleDevices.length === 0}
+      <text
+        class="empty-face-hint"
+        x={RACK_WIDTH / 2}
+        y={RACK_PADDING + RAIL_WIDTH + totalHeight / 2}
+        dominant-baseline="middle"
+        text-anchor="middle"
+        role="note"
+      >
+        No {faceFilter}-facing or full-depth devices yet. Drag one in.
+      </text>
+    {/if}
+
+    <!-- Layer 3: Drop preview (pointer drag or keyboard cursor) -->
+    {#if activePreview}
+      <RackDropZone
+        position={activePreview.position}
+        height={activePreview.height}
+        feedback={activePreview.feedback}
+        railWidth={RAIL_WIDTH}
+        {interiorWidth}
+        uHeight={U_HEIGHT}
+        rackHeight={rack.height}
+        rackPadding={RACK_PADDING}
+      />
+    {/if}
+
+    <!-- Layer 4: Christmas hat (front view only) -->
+    {#if showChristmasHats && effectiveFaceFilter === "front"}
+      <RackChristmasHat rackPadding={RACK_PADDING} />
+    {/if}
+  </svg>
+</div>
+
+<!-- Device context menu (rendered outside SVG for proper DOM layering) -->
+{#if contextMenuOpen && contextMenuTarget}
+  <DeviceContextMenu
+    open={contextMenuOpen}
+    x={contextMenuTarget.x}
+    y={contextMenuTarget.y}
+    onedit={() => ctxMenu.handleEdit(rack)}
+    onduplicate={() => ctxMenu.handleDuplicate(rack)}
+    onmoveup={() => ctxMenu.handleMoveUp(rack, deviceLibrary)}
+    onmovedown={() => ctxMenu.handleMoveDown(rack)}
+    onflip={() => ctxMenu.handleFlip(rack)}
+    ondelete={() => ctxMenu.handleDelete()}
+    canMoveUp={contextActions.getCanMoveUp(
+      rack,
+      deviceLibrary,
+      contextMenuTarget.deviceIndex,
+    )}
+    canMoveDown={contextActions.getCanMoveDown(
+      rack,
+      deviceLibrary,
+      contextMenuTarget.deviceIndex,
+    )}
+    onOpenChange={(open) => {
+      if (!open) ctxMenu.close();
+    }}
+  />
+{/if}
+
+<style>
+  .rack-container {
+    display: inline-block;
+    position: relative;
+    cursor: inherit;
+    touch-action: inherit;
+  }
+
+  .rack-container:focus {
+    outline: 2px solid var(--colour-selection);
+    outline-offset: 2px;
+  }
+
+  .rack-container[aria-current="true"],
+  .rack-container.selected {
+    outline: 2px solid var(--colour-selection);
+    outline-offset: 4px;
+  }
+
+  svg {
+    pointer-events: auto;
+    touch-action: inherit;
+  }
+
+  @keyframes party-glow {
+    0% {
+      filter: drop-shadow(0 0 8px hsl(0, 100%, 50%));
+    }
+    25% {
+      filter: drop-shadow(0 0 8px hsl(90, 100%, 50%));
+    }
+    50% {
+      filter: drop-shadow(0 0 8px hsl(180, 100%, 50%));
+    }
+    75% {
+      filter: drop-shadow(0 0 8px hsl(270, 100%, 50%));
+    }
+    100% {
+      filter: drop-shadow(0 0 8px hsl(360, 100%, 50%));
+    }
+  }
+
+  .rack-container.party-mode .rack-svg {
+    animation: party-glow 3s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rack-container.party-mode .rack-svg {
+      animation: none;
+      filter: drop-shadow(0 0 8px hsl(300, 100%, 50%));
+    }
+  }
+
+  .rack-container.placement-mode {
+    outline: 2px solid var(--dracula-pink, #ff79c6);
+    outline-offset: 4px;
+    border-radius: var(--radius-md, 6px);
+    box-shadow: 0 0 20px rgba(255, 121, 198, 0.3);
+    transition:
+      outline var(--duration-fast, 150ms) var(--ease-out),
+      box-shadow var(--duration-fast, 150ms) var(--ease-out);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rack-container.placement-mode {
+      transition: none;
+    }
+  }
+
+  .empty-face-hint {
+    /* Muted-text token with a concrete fallback; the frontend-design pass
+       confirms the exact token. */
+    fill: var(--neutral-400, #9aa3ad);
+    font-size: 11px;
+    font-family: var(--font-family, system-ui, sans-serif);
+    pointer-events: none;
+    user-select: none;
+  }
+</style>

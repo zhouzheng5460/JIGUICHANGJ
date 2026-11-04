@@ -1,0 +1,765 @@
+/**
+ * Rack Add/Delete Undo/Redo Tests
+ *
+ * Tests for undoing and redoing rack creation and deletion.
+ * Verifies that group memberships are properly restored on undo.
+ *
+ * Issue: #559 - Make Rack Add/Delete Undoable
+ */
+
+import { describe, it, expect, beforeEach } from "vitest";
+import { getLayoutStore, resetLayoutStore } from "$lib/stores/layout.svelte";
+import { getHistoryStore, resetHistoryStore } from "$lib/stores/history.svelte";
+import { updateRackRecorded } from "$lib/stores/layout/recorded-rack-actions";
+import type { LayoutStateAccess } from "$lib/stores/layout/types";
+import type { Layout } from "$lib/types";
+import {
+  createTestConnection,
+  createTestDeviceType,
+  createTestInterfaceTemplate,
+  createTestLayout,
+  createTestRack,
+} from "./factories";
+
+describe("Rack Add/Delete Undo/Redo", () => {
+  beforeEach(() => {
+    resetLayoutStore();
+    resetHistoryStore();
+  });
+
+  // Note: resetLayoutStore creates an initial layout with 1 default rack
+  // Tests account for this baseline state
+
+  describe("addRack undo/redo", () => {
+    it("undoes rack creation", () => {
+      const store = getLayoutStore();
+      const initialRackCount = store.racks.length;
+      store.clearHistory();
+
+      const rack = store.addRack("Test Rack", 42);
+      expect(rack).not.toBeNull();
+      expect(store.racks.length).toBe(initialRackCount + 1);
+      expect(store.getRackById(rack!.id)).toBeDefined();
+
+      store.undo();
+
+      expect(store.racks.length).toBe(initialRackCount);
+      expect(store.getRackById(rack!.id)).toBeUndefined();
+    });
+
+    it("redoes rack creation after undo", () => {
+      const store = getLayoutStore();
+      const initialRackCount = store.racks.length;
+      store.clearHistory();
+
+      const rack = store.addRack("Test Rack", 42);
+      const rackId = rack!.id;
+
+      store.undo();
+      expect(store.racks.length).toBe(initialRackCount);
+
+      store.redo();
+
+      expect(store.racks.length).toBe(initialRackCount + 1);
+      expect(store.getRackById(rackId)).toBeDefined();
+      expect(store.getRackById(rackId)!.name).toBe("Test Rack");
+    });
+
+    it("preserves rack properties on redo", () => {
+      const store = getLayoutStore();
+      store.clearHistory();
+
+      const rack = store.addRack("Custom Rack", 24, 19, "2-post", true, 5);
+
+      store.undo();
+      store.redo();
+
+      const restored = store.getRackById(rack!.id);
+      expect(restored).toBeDefined();
+      expect(restored!.name).toBe("Custom Rack");
+      expect(restored!.height).toBe(24);
+      expect(restored!.width).toBe(19);
+      expect(restored!.form_factor).toBe("2-post");
+      expect(restored!.desc_units).toBe(true);
+      expect(restored!.starting_unit).toBe(5);
+    });
+
+    it("allows multiple rack creations with sequential undo", () => {
+      const store = getLayoutStore();
+      const initialRackCount = store.racks.length;
+      store.clearHistory();
+
+      const rack1 = store.addRack("Rack 1", 42);
+      const rack2 = store.addRack("Rack 2", 42);
+      const rack3 = store.addRack("Rack 3", 42);
+
+      expect(store.racks.length).toBe(initialRackCount + 3);
+
+      store.undo(); // Undo rack3
+      expect(store.racks.length).toBe(initialRackCount + 2);
+      expect(store.getRackById(rack3!.id)).toBeUndefined();
+
+      store.undo(); // Undo rack2
+      expect(store.racks.length).toBe(initialRackCount + 1);
+      expect(store.getRackById(rack2!.id)).toBeUndefined();
+
+      store.undo(); // Undo rack1
+      expect(store.racks.length).toBe(initialRackCount);
+      expect(store.getRackById(rack1!.id)).toBeUndefined();
+    });
+  });
+
+  describe("deleteRack undo/redo", () => {
+    it("undoes rack deletion", () => {
+      const store = getLayoutStore();
+      const rack = store.addRack("Test Rack", 42);
+      const countAfterAdd = store.racks.length;
+      store.clearHistory();
+
+      store.deleteRack(rack!.id);
+      expect(store.racks.length).toBe(countAfterAdd - 1);
+      expect(store.getRackById(rack!.id)).toBeUndefined();
+
+      store.undo();
+
+      expect(store.racks.length).toBe(countAfterAdd);
+      expect(store.getRackById(rack!.id)).toBeDefined();
+      expect(store.getRackById(rack!.id)!.name).toBe("Test Rack");
+    });
+
+    it("redoes rack deletion after undo", () => {
+      const store = getLayoutStore();
+      const rack = store.addRack("Test Rack", 42);
+      const countAfterAdd = store.racks.length;
+      store.clearHistory();
+
+      store.deleteRack(rack!.id);
+      store.undo();
+      expect(store.racks.length).toBe(countAfterAdd);
+
+      store.redo();
+
+      expect(store.racks.length).toBe(countAfterAdd - 1);
+      expect(store.getRackById(rack!.id)).toBeUndefined();
+    });
+
+    it("preserves rack properties on undo delete", () => {
+      const store = getLayoutStore();
+      const rack = store.addRack("Custom Rack", 24, 19, "wall-mount", true, 1);
+      store.clearHistory();
+
+      store.deleteRack(rack!.id);
+      store.undo();
+
+      const restored = store.getRackById(rack!.id);
+      expect(restored).toBeDefined();
+      expect(restored!.name).toBe("Custom Rack");
+      expect(restored!.height).toBe(24);
+      expect(restored!.form_factor).toBe("wall-mount");
+    });
+  });
+
+  describe("deleteRack with group membership restoration", () => {
+    it("restores group membership when undoing rack deletion", () => {
+      const store = getLayoutStore();
+      const rack1 = store.addRack("Rack 1", 42);
+      const rack2 = store.addRack("Rack 2", 42);
+
+      // Create a group with both racks
+      const { group } = store.createRackGroup("Test Group", [
+        rack1!.id,
+        rack2!.id,
+      ]);
+      store.clearHistory();
+
+      // Delete rack1
+      store.deleteRack(rack1!.id);
+
+      // Group should now only contain rack2
+      const updatedGroup = store.getRackGroupById(group!.id);
+      expect(updatedGroup).toBeDefined();
+      expect(updatedGroup!.rack_ids).not.toContain(rack1!.id);
+      expect(updatedGroup!.rack_ids).toContain(rack2!.id);
+
+      // Undo deletion
+      store.undo();
+
+      // Group should be restored with both racks
+      const restoredGroup = store.getRackGroupById(group!.id);
+      expect(restoredGroup).toBeDefined();
+      expect(restoredGroup!.rack_ids).toContain(rack1!.id);
+      expect(restoredGroup!.rack_ids).toContain(rack2!.id);
+    });
+
+    it("recreates group when undoing deletion of last rack in group", () => {
+      const store = getLayoutStore();
+      const rack = store.addRack("Solo Rack", 42);
+
+      // Create a group with single rack
+      const { group } = store.createRackGroup("Solo Group", [rack!.id]);
+      const groupId = group!.id;
+      store.clearHistory();
+
+      // Delete the rack (should also delete the group)
+      store.deleteRack(rack!.id);
+      expect(store.getRackGroupById(groupId)).toBeUndefined();
+
+      // Undo deletion
+      store.undo();
+
+      // Both rack and group should be restored
+      expect(store.getRackById(rack!.id)).toBeDefined();
+      const restoredGroup = store.getRackGroupById(groupId);
+      expect(restoredGroup).toBeDefined();
+      expect(restoredGroup!.rack_ids).toContain(rack!.id);
+    });
+
+    it("handles deletion of rack in multiple-rack group correctly", () => {
+      const store = getLayoutStore();
+      const rack1 = store.addRack("Rack 1", 20);
+      const rack2 = store.addRack("Rack 2", 20);
+      const rack3 = store.addRack("Rack 3", 20);
+
+      const { group } = store.createRackGroup(
+        "Bayed Group",
+        [rack1!.id, rack2!.id, rack3!.id],
+        "bayed",
+      );
+      store.clearHistory();
+
+      // Delete middle rack
+      store.deleteRack(rack2!.id);
+
+      // Verify group still exists with remaining racks
+      const afterDelete = store.getRackGroupById(group!.id);
+      expect(afterDelete!.rack_ids).toEqual([rack1!.id, rack3!.id]);
+
+      // Undo and verify full restoration
+      store.undo();
+
+      const afterUndo = store.getRackGroupById(group!.id);
+      expect(afterUndo!.rack_ids).toContain(rack1!.id);
+      expect(afterUndo!.rack_ids).toContain(rack2!.id);
+      expect(afterUndo!.rack_ids).toContain(rack3!.id);
+    });
+  });
+
+  describe("rack-targeted undo binding (#2126)", () => {
+    it("undoes a rack update on the original rack after switching active rack", () => {
+      const store = getLayoutStore();
+      const rackA = store.addRack("Rack A", 42)!;
+      const rackB = store.addRack("Rack B", 42)!;
+      store.setActiveRack(rackA.id);
+      store.clearHistory();
+
+      store.updateRackRecorded(rackA.id, { name: "Rack A Renamed" });
+      expect(store.getRackById(rackA.id)!.name).toBe("Rack A Renamed");
+
+      // Switch to another rack, then undo
+      store.setActiveRack(rackB.id);
+      store.undo();
+
+      // The original rack reverts; the other rack is untouched
+      expect(store.getRackById(rackA.id)!.name).toBe("Rack A");
+      expect(store.getRackById(rackB.id)!.name).toBe("Rack B");
+
+      // Redo also targets the original rack regardless of active rack
+      store.redo();
+      expect(store.getRackById(rackA.id)!.name).toBe("Rack A Renamed");
+      expect(store.getRackById(rackB.id)!.name).toBe("Rack B");
+    });
+
+    it("undoes a rack clear into the original rack after switching active rack", () => {
+      const store = getLayoutStore();
+      const rackA = store.addRack("Rack A", 42)!;
+      const rackB = store.addRack("Rack B", 42)!;
+      store.addDeviceTypeRaw(
+        createTestDeviceType({ slug: "test-server", u_height: 1 }),
+      );
+      expect(store.placeDevice(rackA.id, "test-server", 5)).toBe(true);
+      expect(
+        store
+          .getRackById(rackA.id)!
+          .devices.some((d) => d.device_type === "test-server"),
+      ).toBe(true);
+      store.clearHistory();
+
+      store.clearRackRecorded(rackA.id);
+      expect(
+        store
+          .getRackById(rackA.id)!
+          .devices.some((d) => d.device_type === "test-server"),
+      ).toBe(false);
+
+      // Switch to another rack, then undo
+      store.setActiveRack(rackB.id);
+      store.undo();
+
+      // Devices restore into the original rack, not the active one
+      expect(
+        store
+          .getRackById(rackA.id)!
+          .devices.some((d) => d.device_type === "test-server"),
+      ).toBe(true);
+      expect(store.getRackById(rackB.id)!.devices.length).toBe(0);
+    });
+
+    it("no-ops undo when the bound rack no longer exists", () => {
+      const rackA = createTestRack({ id: "rack-a", name: "Rack A" });
+      const rackB = createTestRack({ id: "rack-b", name: "Rack B" });
+      let layout = createTestLayout({ racks: [rackA, rackB] });
+      let activeRackId: string | null = "rack-b";
+      const ctx: LayoutStateAccess = {
+        getLayout: () => layout,
+        setLayout: (l) => {
+          layout = l;
+        },
+        getActiveRackId: () => activeRackId,
+        setActiveRackId: (id) => {
+          activeRackId = id;
+        },
+        markDirty: () => {},
+        markStarted: () => {},
+        getRackGroups: () => layout.rack_groups ?? [],
+        findRack: (id) => layout.racks.find((r) => r.id === id),
+        findRackIndex: (id) => layout.racks.findIndex((r) => r.id === id),
+        getHistory: () => getHistoryStore(),
+      };
+
+      updateRackRecorded(ctx, "rack-a", { name: "Rack A Renamed" });
+      expect(layout.racks.find((r) => r.id === "rack-a")!.name).toBe(
+        "Rack A Renamed",
+      );
+
+      // Remove the bound rack outside the history system, then undo.
+      // Without an existence guard the raw mutators fall back to the
+      // first rack and would rename rack B to "Rack A".
+      layout = {
+        ...layout,
+        racks: layout.racks.filter((r) => r.id !== "rack-a"),
+      };
+      getHistoryStore().undo();
+
+      expect(layout.racks.find((r) => r.id === "rack-b")!.name).toBe("Rack B");
+      expect(activeRackId).toBe("rack-b");
+    });
+
+    it("keeps the active rack unchanged across batch update execute and undo", () => {
+      const store = getLayoutStore();
+      const result = store.addBayedRackGroup("Bay Group", 2, 42)!;
+      const [bay1] = result.racks;
+      store.setActiveRack(bay1.id);
+      store.clearHistory();
+
+      // desc_units on a bayed group member fans out to a batch update
+      store.updateRack(bay1.id, { desc_units: true });
+      expect(store.activeRackId).toBe(bay1.id);
+
+      store.undo();
+      expect(store.activeRackId).toBe(bay1.id);
+
+      store.redo();
+      expect(store.activeRackId).toBe(bay1.id);
+    });
+  });
+
+  describe("active rack restoration on undo (#2940)", () => {
+    it("restores the previously active rack after undoing addRack", () => {
+      const store = getLayoutStore();
+      // Rack A occupies index 0; without a fix, deleteRackRaw's naive
+      // racks[0] fallback would land on A even when Z was really active,
+      // masking the bug. Rack Z must be active (and not index 0) to prove
+      // undo restores the *previously active* rack, not just "some" rack.
+      store.addRack("Rack A", 42);
+      const rackZ = store.addRack("Rack Z", 42)!;
+      store.clearHistory();
+      expect(store.activeRackId).toBe(rackZ.id);
+
+      const rackB = store.addRack("Rack B", 42)!;
+      expect(store.activeRackId).toBe(rackB.id);
+
+      store.undo();
+
+      expect(store.activeRackId).toBe(rackZ.id);
+    });
+
+    it("restores the previously active rack after undoing duplicateRack", () => {
+      const store = getLayoutStore();
+      // Same rationale as above: rack Z must be active and not index 0.
+      store.addRack("Rack A", 42);
+      const rackZ = store.addRack("Rack Z", 42)!;
+      store.clearHistory();
+      expect(store.activeRackId).toBe(rackZ.id);
+
+      const result = store.duplicateRack(rackZ.id);
+      expect(result.rack).toBeDefined();
+      expect(store.activeRackId).toBe(result.rack!.id);
+
+      store.undo();
+
+      expect(store.activeRackId).toBe(rackZ.id);
+    });
+
+    it("restores the previously active rack after undoing deleteRack", () => {
+      const store = getLayoutStore();
+      const rackA = store.addRack("Rack A", 42)!;
+      store.addRack("Rack B", 42);
+      store.setActiveRack(rackA.id);
+      store.clearHistory();
+      expect(store.activeRackId).toBe(rackA.id);
+
+      // Deleting the active rack falls back to another rack internally.
+      store.deleteRack(rackA.id);
+      expect(store.activeRackId).not.toBe(rackA.id);
+
+      store.undo();
+
+      expect(store.activeRackId).toBe(rackA.id);
+    });
+  });
+
+  describe("undo does not clobber active rack for non-activating commands (#2976)", () => {
+    it("undo of a non-activating rack add leaves the current active rack unchanged", () => {
+      const store = getLayoutStore();
+      const group = store.addBayedRackGroup("Test Bay", 2, 42, 19)!;
+      const [bay1, bay2] = group.racks;
+      store.clearHistory();
+      expect(store.activeRackId).toBe(bay1!.id);
+
+      // addBayToGroup adds a new rack without activating it.
+      const addResult = store.addBayToGroup(group.group.id);
+      expect(addResult.error).toBeUndefined();
+      expect(store.activeRackId).toBe(bay1!.id);
+
+      // User selects an unrelated, pre-existing rack before undoing.
+      store.setActiveRack(bay2!.id);
+      expect(store.activeRackId).toBe(bay2!.id);
+
+      store.undo();
+
+      // The undone command never activated anything on execute, so its
+      // undo must not restore its stale pre-execute snapshot either.
+      expect(store.activeRackId).toBe(bay2!.id);
+    });
+
+    it("undoing an earlier non-activating command does not clobber a later selection change in a compound undo sequence", () => {
+      const store = getLayoutStore();
+      const group = store.addBayedRackGroup("Test Bay", 2, 42, 19)!;
+      const [bay1, bay2] = group.racks;
+      store.clearHistory();
+      expect(store.activeRackId).toBe(bay1!.id);
+
+      // Earlier command: non-activating add (history entry #1).
+      const addResult = store.addBayToGroup(group.group.id);
+      expect(addResult.error).toBeUndefined();
+      expect(store.activeRackId).toBe(bay1!.id);
+
+      // Later command: activating add (history entry #2).
+      const extraRack = store.addRack("Extra Rack", 42)!;
+      expect(store.activeRackId).toBe(extraRack.id);
+
+      // Undo the later, activating command - this correctly restores
+      // the rack that was active before it ran.
+      store.undo();
+      expect(store.activeRackId).toBe(bay1!.id);
+
+      // User selects a different, unrelated rack before continuing to undo.
+      store.setActiveRack(bay2!.id);
+      expect(store.activeRackId).toBe(bay2!.id);
+
+      // Undo the earlier, non-activating command. It never touched the
+      // active rack on execute, so it must not clobber this selection.
+      store.undo();
+      expect(store.activeRackId).toBe(bay2!.id);
+    });
+
+    it("undo of a non-active rack delete leaves the current active rack unchanged", () => {
+      const store = getLayoutStore();
+      const rackA = store.addRack("Rack A", 42)!;
+      const rackB = store.addRack("Rack B", 42)!;
+      const rackC = store.addRack("Rack C", 42)!;
+      store.setActiveRack(rackA.id);
+      store.clearHistory();
+      expect(store.activeRackId).toBe(rackA.id);
+
+      // Deleting a non-active rack (C) does not change the active rack,
+      // so the delete command's wasActiveAtExecute flag stays false.
+      store.deleteRack(rackC.id);
+      expect(store.activeRackId).toBe(rackA.id);
+
+      // User selects a different, pre-existing rack before undoing.
+      store.setActiveRack(rackB.id);
+      expect(store.activeRackId).toBe(rackB.id);
+
+      store.undo();
+
+      // The delete never changed the active rack on execute, so its undo
+      // must not restore the stale snapshot and clobber this selection.
+      expect(store.activeRackId).toBe(rackB.id);
+    });
+  });
+
+  describe("undo/redo state consistency", () => {
+    it("marks layout as dirty after undo", () => {
+      const store = getLayoutStore();
+      store.addRack("Test Rack", 42);
+      store.markClean();
+
+      store.undo();
+
+      expect(store.isDirty).toBe(true);
+    });
+
+    it("marks layout as dirty after redo", () => {
+      const store = getLayoutStore();
+      store.addRack("Test Rack", 42);
+      store.undo();
+      store.markClean();
+
+      store.redo();
+
+      expect(store.isDirty).toBe(true);
+    });
+
+    it("handles interleaved add/delete/undo operations", () => {
+      const store = getLayoutStore();
+      const initialRackCount = store.racks.length;
+      store.clearHistory();
+
+      const rack1 = store.addRack("Rack 1", 42);
+      const rack2 = store.addRack("Rack 2", 42);
+      store.deleteRack(rack1!.id);
+      const rack3 = store.addRack("Rack 3", 42);
+
+      // Current state: initial racks + rack2 + rack3 (rack1 was deleted)
+      expect(store.racks.length).toBe(initialRackCount + 2);
+
+      store.undo(); // Undo add rack3
+      expect(store.racks.length).toBe(initialRackCount + 1);
+      expect(store.getRackById(rack2!.id)).toBeDefined();
+
+      store.undo(); // Undo delete rack1
+      expect(store.racks.length).toBe(initialRackCount + 2);
+      expect(store.getRackById(rack1!.id)).toBeDefined();
+
+      store.redo(); // Redo delete rack1
+      expect(store.racks.length).toBe(initialRackCount + 1);
+      expect(store.getRackById(rack1!.id)).toBeUndefined();
+
+      store.redo(); // Redo add rack3
+      expect(store.racks.length).toBe(initialRackCount + 2);
+      expect(store.getRackById(rack3!.id)).toBeDefined();
+    });
+  });
+
+  describe("connection cleanup on rack clear and delete (#3122)", () => {
+    const ALL_CONNECTION_IDS = [
+      "conn-a-internal",
+      "conn-a-to-b",
+      "conn-b-internal",
+    ];
+
+    /**
+     * Two racks with two devices each. Connections: one inside rack A, one
+     * from rack A to rack B, and one inside rack B.
+     */
+    function setupConnectedRacks() {
+      const store = getLayoutStore();
+      const rackA = store.addRack("Rack A", 42)!;
+      const rackB = store.addRack("Rack B", 42)!;
+
+      const deviceType = createTestDeviceType({ slug: "test-switch" });
+      deviceType.interfaces = [
+        createTestInterfaceTemplate({ name: "port-0" }),
+        createTestInterfaceTemplate({ name: "port-1" }),
+      ];
+      store.addDeviceTypeRaw(deviceType);
+      for (const rack of [rackA, rackB]) {
+        store.placeDevice(rack.id, deviceType.slug, 5);
+        store.placeDevice(rack.id, deviceType.slug, 10);
+      }
+      const [a1, a2] = store.getRackById(rackA.id)!.devices;
+      const [b1, b2] = store.getRackById(rackB.id)!.devices;
+
+      store.addConnectionRaw(
+        createTestConnection({
+          id: "conn-a-internal",
+          a_port_id: a1!.ports![0]!.id,
+          b_port_id: a2!.ports![0]!.id,
+        }),
+      );
+      store.addConnectionRaw(
+        createTestConnection({
+          id: "conn-a-to-b",
+          a_port_id: a1!.ports![1]!.id,
+          b_port_id: b1!.ports![1]!.id,
+        }),
+      );
+      store.addConnectionRaw(
+        createTestConnection({
+          id: "conn-b-internal",
+          a_port_id: b1!.ports![0]!.id,
+          b_port_id: b2!.ports![0]!.id,
+        }),
+      );
+      store.clearHistory();
+
+      return { store, rackA, rackADeviceIds: [a1!.id, a2!.id] };
+    }
+
+    function connectionIds(store: ReturnType<typeof getLayoutStore>) {
+      return (store.layout.connections ?? []).map((c) => c.id).sort();
+    }
+
+    it("clearing a rack removes its devices' connections and one undo restores both", () => {
+      const { store, rackA, rackADeviceIds } = setupConnectedRacks();
+
+      store.clearRackRecorded(rackA.id);
+
+      expect(store.getRackById(rackA.id)!.devices).toEqual([]);
+      expect(connectionIds(store)).toEqual(["conn-b-internal"]);
+
+      store.undo();
+
+      expect(store.getRackById(rackA.id)!.devices.map((d) => d.id)).toEqual(
+        rackADeviceIds,
+      );
+      expect(connectionIds(store)).toEqual(ALL_CONNECTION_IDS);
+
+      store.redo();
+
+      expect(store.getRackById(rackA.id)!.devices).toEqual([]);
+      expect(connectionIds(store)).toEqual(["conn-b-internal"]);
+    });
+
+    it("deleting a rack removes its devices' connections and one undo restores both", () => {
+      const { store, rackA, rackADeviceIds } = setupConnectedRacks();
+
+      store.deleteRack(rackA.id);
+
+      expect(store.getRackById(rackA.id)).toBeUndefined();
+      expect(connectionIds(store)).toEqual(["conn-b-internal"]);
+
+      store.undo();
+
+      expect(store.getRackById(rackA.id)!.devices.map((d) => d.id)).toEqual(
+        rackADeviceIds,
+      );
+      expect(connectionIds(store)).toEqual(ALL_CONNECTION_IDS);
+
+      store.redo();
+
+      expect(store.getRackById(rackA.id)).toBeUndefined();
+      expect(connectionIds(store)).toEqual(["conn-b-internal"]);
+    });
+
+    it("keeps connections between devices in other racks unchanged", () => {
+      const { store, rackA } = setupConnectedRacks();
+      const survivor = {
+        ...store.layout.connections!.find((c) => c.id === "conn-b-internal")!,
+      };
+
+      store.clearRackRecorded(rackA.id);
+      expect(store.layout.connections).toEqual([survivor]);
+
+      store.undo();
+      store.deleteRack(rackA.id);
+      expect(store.layout.connections).toEqual([survivor]);
+    });
+
+    const BAY_CONNECTION_IDS = [
+      "conn-b1-b2",
+      "conn-b2-b3",
+      "conn-b3-c",
+      "conn-c-internal",
+    ];
+
+    /**
+     * A three-bay group [b1, b2, b3] with one device per bay, and a standalone
+     * rack C with two devices. Connections: b1-b2 and b2-b3 inside the bay,
+     * b3 to C, and one inside C.
+     */
+    function setupConnectedBay() {
+      const store = getLayoutStore();
+      const { group } = store.addBayedRackGroup("Bay", 3, 42, 19)!;
+      const bayRackIds = [...group.rack_ids];
+      const [b1, b2, b3] = bayRackIds as [string, string, string];
+      const rackC = store.addRack("Rack C", 42)!;
+
+      const deviceType = createTestDeviceType({ slug: "test-switch" });
+      deviceType.interfaces = [
+        createTestInterfaceTemplate({ name: "port-0" }),
+        createTestInterfaceTemplate({ name: "port-1" }),
+      ];
+      store.addDeviceTypeRaw(deviceType);
+      for (const rackId of [b1, b2, b3, rackC.id]) {
+        store.placeDevice(rackId, deviceType.slug, 5);
+      }
+      store.placeDevice(rackC.id, deviceType.slug, 10);
+
+      const port = (rackId: string, deviceIndex: number, portIndex: number) =>
+        store.getRackById(rackId)!.devices[deviceIndex]!.ports![portIndex]!.id;
+      const connections: [string, string, string][] = [
+        ["conn-b1-b2", port(b1, 0, 0), port(b2, 0, 0)],
+        ["conn-b2-b3", port(b2, 0, 1), port(b3, 0, 0)],
+        ["conn-b3-c", port(b3, 0, 1), port(rackC.id, 0, 0)],
+        ["conn-c-internal", port(rackC.id, 0, 1), port(rackC.id, 1, 0)],
+      ];
+      for (const [id, a_port_id, b_port_id] of connections) {
+        store.addConnectionRaw(
+          createTestConnection({ id, a_port_id, b_port_id }),
+        );
+      }
+      store.clearHistory();
+
+      const deviceIds = (rackId: string) =>
+        store.getRackById(rackId)?.devices.map((d) => d.id);
+      return { store, groupId: group.id, bayRackIds, b3, deviceIds };
+    }
+
+    it("removing a bay member removes its connections and one undo restores the rack, its devices and connections", () => {
+      const { store, groupId, bayRackIds, b3, deviceIds } = setupConnectedBay();
+      const memberDeviceIds = deviceIds(b3);
+
+      store.removeRackFromBay(b3);
+
+      expect(store.getRackById(b3)).toBeUndefined();
+      expect(connectionIds(store)).toEqual(["conn-b1-b2", "conn-c-internal"]);
+
+      store.undo();
+
+      expect(deviceIds(b3)).toEqual(memberDeviceIds);
+      expect(store.getRackGroupById(groupId)!.rack_ids).toEqual(bayRackIds);
+      expect(connectionIds(store)).toEqual(BAY_CONNECTION_IDS);
+    });
+
+    it("deleting a bayed group removes its racks' connections and one undo restores them all", () => {
+      const { store, groupId, bayRackIds, deviceIds } = setupConnectedBay();
+      const memberDeviceIds = bayRackIds.map(deviceIds);
+
+      store.deleteBayedGroup(groupId);
+
+      for (const rackId of bayRackIds) {
+        expect(store.getRackById(rackId)).toBeUndefined();
+      }
+      expect(connectionIds(store)).toEqual(["conn-c-internal"]);
+
+      store.undo();
+
+      expect(bayRackIds.map(deviceIds)).toEqual(memberDeviceIds);
+      expect(store.getRackGroupById(groupId)!.rack_ids).toEqual(bayRackIds);
+      expect(connectionIds(store)).toEqual(BAY_CONNECTION_IDS);
+    });
+
+    it("clearing a rack does not throw when layout.connections is malformed", () => {
+      // Untrusted input can reach loadLayout with a truthy non-array
+      // `connections` (#3090 review), which the store must tolerate.
+      const { store, rackA } = setupConnectedRacks();
+      const snapshot = JSON.parse(JSON.stringify(store.layout)) as Layout;
+      store.loadLayout({ ...snapshot, connections: {} } as unknown as Layout);
+
+      expect(() => store.clearRackRecorded(rackA.id)).not.toThrow();
+      expect(store.getRackById(rackA.id)!.devices).toEqual([]);
+    });
+  });
+});

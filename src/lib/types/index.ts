@@ -1,0 +1,819 @@
+/**
+ * Rackula Core Type Definitions
+ * Schema v1.0.0 - Flat structure with NetBox-compatible fields
+ */
+
+// =============================================================================
+// Enums and Primitive Types
+// =============================================================================
+
+/**
+ * Rack view types - front or rear view
+ */
+export type RackView = "front" | "rear";
+
+/**
+ * Metadata for layout persistence and export
+ * @see docs/plans/2026-01-22-data-directory-refactor-design.md
+ */
+export interface LayoutMetadata {
+  /** UUID - stable identity across renames/moves */
+  id: string;
+  /** Human-readable layout name */
+  name: string;
+  /** Format version for future migrations (e.g., "1.0") */
+  schema_version: string;
+  /** Optional notes about the layout */
+  description?: string;
+}
+
+/**
+ * Device face types - which face(s) of rack device occupies
+ */
+export type DeviceFace = "front" | "rear" | "both";
+
+/**
+ * Device category types - 14 predefined categories
+ */
+export type DeviceCategory =
+  | "server"
+  | "network"
+  | "firewall"
+  | "patch-panel"
+  | "power"
+  | "storage"
+  | "kvm"
+  | "av-media"
+  | "cooling"
+  | "shelf"
+  | "blank"
+  | "cable-management"
+  | "chassis"
+  | "other";
+
+/**
+ * Weight unit types (NetBox-compatible)
+ */
+export type WeightUnit = "kg" | "lb";
+
+/**
+ * Rack form factor types (NetBox-compatible)
+ */
+export type FormFactor =
+  "2-post" | "4-post" | "4-post-cabinet" | "wall-mount" | "open-frame";
+
+/**
+ * Display mode for devices in rack visualization
+ * - 'label': Show device name as text
+ * - 'image': Show device image only
+ * - 'image-label': Show device image with name overlay
+ */
+export type DisplayMode = "label" | "image" | "image-label";
+
+/** Short human labels for each display mode, shown on the display-mode controls. */
+export const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
+  label: "Labels",
+  image: "Images",
+  "image-label": "Both",
+};
+
+/**
+ * Annotation field for rack-side annotation column
+ * - 'name': Custom placement name
+ * - 'ip': IP address from custom_fields.ip
+ * - 'notes': Placement notes
+ * - 'asset_tag': Asset identifier (from DeviceType)
+ * - 'serial': Serial number (from DeviceType)
+ * - 'manufacturer': Brand name (from DeviceType)
+ */
+export type AnnotationField =
+  "name" | "ip" | "notes" | "asset_tag" | "serial" | "manufacturer";
+
+/**
+ * Airflow direction types (NetBox-compatible with full parity)
+ */
+export type Airflow =
+  | "passive"
+  | "front-to-rear"
+  | "rear-to-front"
+  | "left-to-right"
+  | "right-to-left"
+  | "side-to-rear"
+  | "mixed";
+
+/**
+ * Subdevice role for parent/child device relationships
+ */
+export type SubdeviceRole = "parent" | "child";
+
+/**
+ * Slot width for device types
+ * - 1: Half-width device (occupies one slot)
+ * - 2: Full-width device (occupies both slots, default)
+ */
+export type SlotWidth = 1 | 2;
+
+/**
+ * Rack width in inches (physical rack standard widths)
+ * - 10: 10-inch mini racks (common for home/desktop setups)
+ * - 19: Standard 19-inch racks (most common)
+ * - 23: 23-inch racks (telecom/broadcast industry)
+ *
+ * This is a Rackula-specific extension; NetBox does not have this field on DeviceType.
+ */
+export type RackWidth = 10 | 19 | 21 | 23;
+
+/**
+ * Network interface type (NetBox-compatible subset)
+ * Common physical interface types for rack equipment
+ */
+export type InterfaceType =
+  // Copper Ethernet
+  | "100base-tx" // 100 Mbps RJ45
+  | "1000base-t" // 1 GbE RJ45
+  | "2.5gbase-t" // 2.5 GbE RJ45
+  | "5gbase-t" // 5 GbE RJ45
+  | "10gbase-t" // 10 GbE RJ45
+  // Modular - SFP/SFP+/SFP28
+  | "1000base-x-sfp" // 1 GbE SFP
+  | "10gbase-x-sfpp" // 10 GbE SFP+
+  | "25gbase-x-sfp28" // 25 GbE SFP28
+  // Modular - QSFP/QSFP28/QSFP-DD
+  | "40gbase-x-qsfpp" // 40 GbE QSFP+
+  | "100gbase-x-qsfp28" // 100 GbE QSFP28
+  | "100gbase-x-qsfpdd" // 100 GbE QSFP-DD
+  | "200gbase-x-qsfp56" // 200 GbE QSFP56
+  | "200gbase-x-qsfpdd" // 200 GbE QSFP-DD
+  | "400gbase-x-qsfpdd" // 400 GbE QSFP-DD
+  // Console & Management
+  | "console" // Console port (RJ45/USB)
+  | "management" // Dedicated management/OOB interface
+  | "usb-a" // USB Type A
+  | "usb-b" // USB Type B
+  | "usb-c" // USB Type C
+  | "usb-mini-b" // USB Mini B
+  | "usb-micro-b" // USB Micro B
+  // Virtual
+  | "virtual" // Virtual interface
+  | "lag" // Link Aggregation Group
+  // Pro audio / AV (fork; per spike #1927 taxonomy)
+  | "xlr-3" // XLR 3-pin (mic/line/AES3)
+  | "trs-1-4" // 1/4" TRS balanced
+  | "ts-1-4" // 1/4" TS unbalanced
+  | "rca" // RCA/phono (consumer line, S/PDIF)
+  | "adat-optical" // TOSLINK ADAT
+  | "midi-din" // 5-pin DIN MIDI
+  | "bnc" // BNC (word clock, AES3id)
+  | "db25-audio" // DB25 TASCAM analog 8-channel
+  | "phoenix" // Phoenix/Euroblock terminal block
+  | "speakon" // Neutrik Speakon (powered speaker)
+  | "xlr-5" // XLR 5-pin (DMX512-capable connector, some mic variants)
+  // AV - Video
+  | "displayport" // DisplayPort
+  | "hdmi" // HDMI
+  | "sdi-bnc" // SDI video (BNC, 75 ohm)
+  | "vga" // VGA (D-sub 15)
+  // AV - Control
+  | "dmx-xlr" // DMX512 over XLR (5-pin)
+  | "rs-232" // RS-232 serial
+  | "rs-422" // RS-422 serial
+  // AV - Other
+  | "aes3" // AES3 digital audio
+  | "avb" // AVB audio/video bridging
+  | "dante" // Dante audio-over-IP
+  // Other
+  | "other"; // Catch-all for unlisted types
+
+/**
+ * PoE type (NetBox-compatible)
+ * Power over Ethernet standards
+ */
+export type PoEType =
+  | "type1-ieee802.3af" // 15.4W max
+  | "type2-ieee802.3at" // 30W max (PoE+)
+  | "type3-ieee802.3bt" // 60W max (PoE++ 4-pair)
+  | "type4-ieee802.3bt" // 100W max (PoE++ 4-pair)
+  | "passive-24v-1pair" // Passive 24V (1-pair)
+  | "passive-24v-2pair" // Passive 24V (2-pair)
+  | "passive-48v-1pair" // Passive 48V (1-pair)
+  | "passive-48v-2pair" // Passive 48V (2-pair)
+  | "passive-56v-4pair"; // Passive 56V (4-pair, Ubiquiti)
+
+/**
+ * PoE mode - powered device or power sourcing equipment
+ */
+export type PoEMode = "pd" | "pse";
+
+/**
+ * Interface position on device face
+ */
+export type InterfacePosition = "front" | "rear";
+
+/**
+ * Port signal direction (spike #1927; used for AV signal routing)
+ */
+export type PortDirection = "input" | "output" | "bidirectional";
+
+/**
+ * Signal type carried by a port, independent of the physical connector.
+ * The connector (InterfaceType) describes the plug; the signal type describes
+ * what flows through it (e.g. an XLR can carry mic, line, or AES3).
+ */
+export type SignalType =
+  | "analog-audio-mic"
+  | "analog-audio-line"
+  | "analog-audio-speaker"
+  | "digital-audio-aes3"
+  | "digital-audio-dante"
+  | "digital-audio-avb"
+  | "digital-video-hdmi"
+  | "digital-video-sdi"
+  | "clock-word"
+  | "control-midi";
+
+// =============================================================================
+// Component Types (NetBox-compatible, schema-only)
+// =============================================================================
+
+/**
+ * Network interface template definition (NetBox-compatible with Rackula extensions)
+ * Used to define interface templates on DeviceType
+ */
+export interface InterfaceTemplate {
+  /** Interface name (e.g., 'eth0', 'Gi1/0/1', 'Port 1') */
+  name: string;
+  /** Interface type (from InterfaceType enum) */
+  type: InterfaceType;
+  /** Alternative display label */
+  label?: string;
+  /** Management interface only (default: false) */
+  mgmt_only?: boolean;
+  /**
+   * Interface position on device face (Rackula extension for visual layout).
+   * When omitted, defaults to 'front' (matching DEFAULT_RACK_VIEW constant).
+   * @default 'front'
+   */
+  position?: InterfacePosition;
+  /** PoE mode: pd (powered device) or pse (power sourcing equipment) */
+  poe_mode?: PoEMode;
+  /** PoE type/standard */
+  poe_type?: PoEType;
+  /** Signal direction. Provides the default used when the placed port omits its own. */
+  direction?: PortDirection;
+  /** Signal carried by this port (explicit; inferred from type and direction when unset) */
+  signal_type?: SignalType;
+}
+
+/**
+ * Power port (input) definition
+ */
+export interface PowerPort {
+  /** Port name (e.g., 'PSU1', 'Power Input') */
+  name: string;
+  /** Port type */
+  type?: string;
+  /** Maximum power draw in watts */
+  maximum_draw?: number;
+  /** Allocated power draw in watts */
+  allocated_draw?: number;
+}
+
+/**
+ * Power outlet (output) definition
+ */
+export interface PowerOutlet {
+  /** Outlet name (e.g., 'Outlet 1', 'C13-1') */
+  name: string;
+  /** Outlet type */
+  type?: string;
+  /** Reference to PowerPort.name this outlet is fed from */
+  power_port?: string;
+  /** Feed leg for three-phase power */
+  feed_leg?: "A" | "B" | "C";
+}
+
+/**
+ * Device bay for parent devices (blade chassis, modular switches)
+ */
+export interface DeviceBay {
+  /** Bay name (e.g., 'Blade Bay 1', 'Slot 1') */
+  name: string;
+  /** Bay position identifier */
+  position?: string;
+}
+
+/**
+ * Inventory item (internal components)
+ */
+export interface InventoryItem {
+  /** Item name (e.g., 'RAM Module 1', 'CPU') */
+  name: string;
+  /** Item manufacturer */
+  manufacturer?: string;
+  /** Part ID / SKU */
+  part_id?: string;
+  /** Serial number */
+  serial?: string;
+  /** Asset tag */
+  asset_tag?: string;
+}
+
+/**
+ * External link/reference
+ */
+export interface DeviceLink {
+  /** Link label (e.g., 'Vendor Manual', 'Support Page') */
+  label: string;
+  /** URL */
+  url: string;
+}
+
+// =============================================================================
+// Container Slot Types (v0.6.0)
+// =============================================================================
+
+/**
+ * Position within a container's slot grid
+ */
+export interface SlotPosition2D {
+  /** Row index (0-indexed from bottom of container) */
+  row: number;
+  /** Column index (0-indexed from left) */
+  col: number;
+}
+
+/**
+ * Slot definition for container devices
+ * A DeviceType with slots[] is a container that can hold child devices.
+ * Container identification: slots.length > 0 implies container (no separate boolean).
+ */
+export interface Slot {
+  /** Unique identifier within this DeviceType (e.g., "bay-1") */
+  id: string;
+  /** Display label (e.g., "Left Bay") */
+  name?: string;
+  /** Position in container's slot grid */
+  position: SlotPosition2D;
+  /** Horizontal width as fraction of container width (0.5 = half-width, default: 1.0) */
+  width_fraction?: number;
+  /** Slot height in rack units (default: 1) */
+  height_units?: number;
+  /** Categories of devices this slot accepts (empty = accepts all) */
+  accepts?: DeviceCategory[];
+}
+
+// =============================================================================
+// PlacedPort Types
+// =============================================================================
+
+/**
+ * Placed port instance - created when a device is placed in a rack
+ * Provides stable UUID references for connections instead of fragile template name strings
+ */
+export interface PlacedPort {
+  /** Unique identifier (UUID) - stable identity for connection references */
+  id: string;
+  /** Reference to InterfaceTemplate.name from DeviceType */
+  template_name: string;
+  /** Position index in DeviceType.interfaces array - for ordering and lookup */
+  template_index: number;
+  /** Cached interface type from template - avoids lookups for cable routing */
+  type: InterfaceType;
+  /** User override label for this port instance */
+  label?: string;
+  /** Signal direction override; falls back to the InterfaceTemplate default when unset */
+  direction?: PortDirection;
+  /** Signal override; falls back to the template value, then inference, when unset */
+  signal_type?: SignalType;
+}
+
+/**
+ * Payload emitted when a rendered port is clicked. Carries the PlacedPort.id
+ * so callers (e.g. click-to-connect, #1932) can identify which port instance
+ * was targeted, not just which interface template it renders from.
+ */
+export interface PortClickInfo {
+  /**
+   * PlacedPort.id, when this port has an instantiated placement. Undefined
+   * for a layout placed before PlacedPort/instantiatePorts() existed, or for
+   * a template added to the device type after this device was placed.
+   */
+  portId: string | undefined;
+  /** The interface template this port renders from. */
+  iface: InterfaceTemplate;
+  /**
+   * The instantiated PlacedPort itself, when one exists (same presence rule
+   * as portId - they always agree). Carries any per-port direction override
+   * (#1930) so a consumer can resolve the effective direction the same way
+   * connection rendering does (resolveConnectionPortDirection in
+   * connection-path.ts), not just from the InterfaceTemplate default.
+   */
+  port: PlacedPort | undefined;
+}
+
+// =============================================================================
+// Connection Types (Port-based - MVP)
+// =============================================================================
+
+/**
+ * Connection between two ports
+ * MVP model: just the essential fields, add complexity when needed
+ * References PlacedPort.id directly for stable connections
+ */
+export interface Connection {
+  /** Unique identifier (UUID) */
+  id: string;
+  /** A-side port ID (PlacedPort.id) */
+  a_port_id: string;
+  /** B-side port ID (PlacedPort.id) */
+  b_port_id: string;
+  /** Optional user label */
+  label?: string;
+  /** Optional color for visualization (hex, e.g., '#FF5500') */
+  color?: string;
+}
+
+// =============================================================================
+// Device Types (Storage/Serialization - Schema v1.0.0)
+// =============================================================================
+
+/**
+ * Device Type - template definition in library (Storage format)
+ * Schema v1.0.0: Flat structure with NetBox-compatible fields
+ */
+export interface DeviceType {
+  // --- Core Identity ---
+  /** Unique identifier, kebab-case slug */
+  slug: string;
+  /** Optional human-readable name (legacy compatibility) */
+  name?: string;
+  /** Manufacturer name */
+  manufacturer?: string;
+  /** Model name */
+  model?: string;
+  /** Part number / SKU */
+  part_number?: string;
+
+  // --- Physical Properties ---
+  /** Height in rack units (0.5-42U) */
+  u_height: number;
+  /** Width in slots (1 = half-width, 2 = full-width). Default: 2 */
+  slot_width?: SlotWidth;
+  /**
+   * Compatible rack widths in inches.
+   * Rackula-specific extension (not in NetBox schema).
+   * Devices without this field are assumed to be 19" compatible (standard racks).
+   */
+  rack_widths?: RackWidth[];
+  /** Whether device occupies full rack depth (default: true) */
+  is_full_depth?: boolean;
+  /** Whether device is powered (false for patch panels, shelves) */
+  is_powered?: boolean;
+  /** Device weight */
+  weight?: number;
+  /** Weight unit (required if weight is provided) */
+  weight_unit?: WeightUnit;
+  /** Airflow direction */
+  airflow?: Airflow;
+
+  // --- Image Flags ---
+  /** Front image exists */
+  front_image?: boolean;
+  /** Rear image exists */
+  rear_image?: boolean;
+
+  // --- Rackula Fields (flat, not nested) ---
+  /** Hex colour for display (e.g., '#4A90D9') */
+  colour: string;
+  /** Device category for UI filtering */
+  category: DeviceCategory;
+  /** User organization tags */
+  tags?: string[];
+
+  // --- Extension Fields ---
+  /** Notes/comments */
+  notes?: string;
+  /** Legacy comments field from NetBox imports */
+  comments?: string;
+  /** Serial number */
+  serial_number?: string;
+  /** Asset tag */
+  asset_tag?: string;
+  /** External links */
+  links?: DeviceLink[];
+  /** User-defined custom fields */
+  custom_fields?: Record<string, unknown>;
+
+  // --- Component Arrays (schema-only, future features) ---
+  /** Network interface templates */
+  interfaces?: InterfaceTemplate[];
+  /** Power input ports */
+  power_ports?: PowerPort[];
+  /** Power output outlets (for PDUs) */
+  power_outlets?: PowerOutlet[];
+  /** Device bays (for blade chassis) */
+  device_bays?: DeviceBay[];
+  /** Inventory items (internal components) */
+  inventory_items?: InventoryItem[];
+
+  // --- Subdevice Support (schema-only) ---
+  /** Role in parent/child relationship */
+  subdevice_role?: SubdeviceRole;
+
+  // --- Power Device Properties ---
+  /** VA capacity (e.g., 1500, 3000) - for UPS devices */
+  va_rating?: number;
+  /** Legacy outlet count summary for power devices */
+  outlet_count?: number;
+
+  // --- Container Support (v0.6.0) ---
+  /**
+   * Slot definitions for container devices.
+   * Presence of slots[] with length > 0 indicates this is a container device.
+   * Container devices can hold child PlacedDevices in their slots.
+   */
+  slots?: Slot[];
+}
+
+/**
+ * Placed device - storage format
+ * References a DeviceType by slug
+ */
+export interface PlacedDevice {
+  /** Unique identifier (UUID) for stable references */
+  id: string;
+  /** Reference to DeviceType.slug */
+  device_type: string;
+  /**
+   * Position in internal units (1/6U).
+   * - Rack-level devices: position in internal units from bottom (e.g., 6 = U1)
+   * - Container children: position is 0-indexed relative to container
+   * Use toInternalUnits/toHumanUnits from $lib/utils/position for conversion.
+   * @see UNITS_PER_U for the internal units constant (6 units per 1U)
+   */
+  position: number;
+  /** Which face(s) of the rack the device occupies */
+  face: DeviceFace;
+  /** Optional custom display name for this placement */
+  name?: string;
+  /** Legacy placement label alias */
+  label?: string;
+
+  // --- Port Instances ---
+  /** Instantiated ports from DeviceType.interfaces with stable UUIDs */
+  ports?: PlacedPort[];
+
+  // --- Placement Image Override ---
+  /** Custom front image for this specific placement (overrides device type image) */
+  front_image?: string;
+  /** Custom rear image for this specific placement (overrides device type image) */
+  rear_image?: string;
+
+  // --- Placement Colour Override ---
+  /** Custom colour for this specific placement (overrides device type colour) */
+  colour_override?: string;
+
+  // --- Subdevice Placement (schema-only) ---
+  /** Parent placement ID (for child devices in bays) */
+  parent_device?: string;
+  /** Bay name in parent device */
+  device_bay?: string;
+
+  // --- Container Child Placement (v0.6.0) ---
+  /**
+   * UUID of parent PlacedDevice (if this device is nested in a container).
+   * When set, this device is a child of the container and:
+   * - position is relative (0-indexed from bottom of container)
+   * - device is excluded from rack-level collision detection
+   * - device inherits face from parent container
+   */
+  container_id?: string;
+  /**
+   * Which slot in parent container (references Slot.id in parent's DeviceType.slots).
+   * Required when container_id is set.
+   */
+  slot_id?: string;
+
+  // --- Auto-Created Placement ---
+  /**
+   * True when this placement was synthesized automatically (e.g. a carrier
+   * created to hold a sub-U device) rather than placed by the user. Lets a
+   * later slice self-remove auto-synthesized carriers when their last child is
+   * removed, while user-placed carriers persist. Default: false.
+   */
+  auto_created?: boolean;
+
+  // --- Extension Fields ---
+  /** Notes for this placement */
+  notes?: string;
+  /** User-defined custom fields */
+  custom_fields?: Record<string, unknown>;
+}
+
+// =============================================================================
+// Rack Types
+// =============================================================================
+
+/**
+ * A rack unit container
+ */
+export interface Rack {
+  /** Unique identifier (required for multi-rack support) */
+  id: string;
+  /** Display name */
+  name: string;
+  /** Height in rack units (1-100U) */
+  height: number;
+  /** Width in inches (10, 19, or 23) */
+  width: 10 | 19 | 21 | 23;
+  /** Descending units - if true, U1 is at top (default: false) */
+  desc_units: boolean;
+  /** Show rear view on canvas (default: true) */
+  show_rear: boolean;
+  /** Rack form factor */
+  form_factor: FormFactor;
+  /** Starting unit number (default: 1) */
+  starting_unit: number;
+  /** Order position for multi-rack layouts */
+  position: number;
+  /** Devices placed in this rack */
+  devices: PlacedDevice[];
+  /** Notes for this rack */
+  notes?: string;
+  /** Internal depth in millimetres (default: 1000) */
+  depth_mm?: number;
+  /** Base weight of the empty rack, in kilograms (default: 0) */
+  base_weight?: number;
+  /** Current view mode - runtime only, not persisted */
+  view?: RackView;
+}
+
+/**
+ * Resolved selection view-model for the edit panel sections.
+ * The panel host derives this once from the selection stores and passes it
+ * down to each section component (EditPanelMetadata, EditPanelPosition,
+ * EditPanelImage, EditPanelActions), which render properties for this single
+ * device. The host owns empty-state and multi-select orchestration.
+ */
+export interface SelectedDeviceInfo {
+  device: DeviceType;
+  placedDevice: PlacedDevice;
+  rack: Rack;
+  deviceIndex: number;
+}
+
+/**
+ * Layout preset for rack groups
+ * - 'bayed': Stacked front/rear view for touring racks
+ * - 'row': Side-by-side layout (default)
+ */
+export type RackGroupLayoutPreset = "bayed" | "row";
+/** @deprecated Use RackGroupLayoutPreset */
+export type LayoutPreset = RackGroupLayoutPreset;
+
+/**
+ * A group of racks with shared layout behavior
+ * Used for touring/bayed rack configurations and linked rack constraints
+ */
+export interface RackGroup {
+  /** Unique identifier */
+  id: string;
+  /** Optional display name */
+  name?: string;
+  /** References to Rack.id values in this group */
+  rack_ids: string[];
+  /** Layout preset for this group */
+  layout_preset?: RackGroupLayoutPreset;
+}
+
+// =============================================================================
+// Layout Types
+// =============================================================================
+
+/**
+ * Layout settings
+ */
+export interface LayoutSettings {
+  /** Display mode for devices (default: label) */
+  display_mode: DisplayMode;
+  /** Show labels overlaid on device images (default: false) */
+  show_labels_on_images: boolean;
+}
+
+/**
+ * Complete layout structure
+ */
+export interface Layout {
+  /** Schema version */
+  version: string;
+  /** Layout name */
+  name: string;
+  /** Array of racks (multi-rack support) */
+  racks: Rack[];
+  /** Optional rack groups for linked/bayed configurations */
+  rack_groups?: RackGroup[];
+  /** Device type library */
+  device_types: DeviceType[];
+  /** Layout settings */
+  settings: LayoutSettings;
+  /** Port-to-port connections (MVP model) */
+  connections?: Connection[];
+  /** Metadata for persistence (UUID, name, description, etc.) */
+  metadata?: Partial<LayoutMetadata>;
+}
+
+// =============================================================================
+// Helper Types for Creation
+// =============================================================================
+
+/**
+ * Helper type for creating a DeviceType
+ */
+export interface CreateDeviceTypeData {
+  name: string;
+  u_height: number;
+  category: DeviceCategory;
+  colour: string;
+  manufacturer?: string;
+  model?: string;
+  part_number?: string;
+  is_full_depth?: boolean;
+  is_powered?: boolean;
+  weight?: number;
+  weight_unit?: WeightUnit;
+  airflow?: Airflow;
+  tags?: string[];
+  notes?: string;
+  // Power device properties
+  va_rating?: number;
+}
+
+/**
+ * Helper type for creating a rack
+ */
+export interface CreateRackData {
+  name: string;
+  height: number;
+  width?: 10 | 19 | 21 | 23;
+  form_factor?: FormFactor;
+  desc_units?: boolean;
+  starting_unit?: number;
+}
+
+// =============================================================================
+// Export Types
+// =============================================================================
+
+/**
+ * Export format options
+ */
+export type ExportFormat = "png" | "jpeg" | "svg" | "pdf" | "csv" | "zip";
+
+/**
+ * Export scope options
+ */
+export type ExportScope = "all" | "selected";
+
+/**
+ * Export background options
+ */
+export type ExportBackground = "dark" | "light" | "transparent";
+
+/**
+ * Export view options - which rack face(s) to include
+ */
+export type ExportView = "front" | "rear" | "both";
+
+/**
+ * Export options for generating images/files
+ */
+export interface ExportOptions {
+  /** Output format */
+  format: ExportFormat;
+  /** Which racks to include */
+  scope: ExportScope;
+  /** Include rack names in export */
+  includeNames: boolean;
+  /** Include device legend */
+  includeLegend: boolean;
+  /** Background style */
+  background: ExportBackground;
+  /** Which view(s) to export */
+  exportView?: ExportView;
+  /** Display mode */
+  displayMode?: DisplayMode;
+  /** Include sharing QR code in export */
+  includeQR?: boolean;
+  /** Pre-generated QR code as PNG data URL (required when includeQR is true) */
+  qrCodeDataUrl?: string;
+  /** Include annotation column in export */
+  includeAnnotations?: boolean;
+  /** Which field to show in annotation column */
+  annotationField?: AnnotationField;
+  /**
+   * Selected rack IDs for multi-rack export.
+   * When provided, only these racks will be exported.
+   * Used by ExportDialog rack selection checklist.
+   */
+  selectedRackIds?: string[];
+}

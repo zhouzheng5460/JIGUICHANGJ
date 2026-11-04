@@ -1,0 +1,1385 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Calendar Versioning](https://calver.org/).
+
+## [26.9.0] - 2026-09-13
+
+### I DID A LOT, ACTUALLY
+
+People are saying there are no new features this month, like I sat in the crypt and did nothing. I merged twenty-four dependency updates. I made a field required. You have no idea what it takes to keep a castle this clean. You leave one cobweb up and the villagers are at the gate with torches, and then it's a whole thing.
+
+### This release
+
+A maintenance release. The Docker images and LXC tarball stop shipping test tooling, the app and API pick up patched js-yaml and hono, server-mode layouts appear in the Layouts panel, and clearing or deleting a rack no longer leaves orphaned connections.
+
+### Changed
+
+- Saved layouts record the current schema version (`schema_version: "1.1"`) instead of a hardcoded `1.0`, so files with 1.1-only content such as `xlr-3` ports describe themselves correctly (#3108, PR #3280)
+
+### Fixed
+
+- Server-mode layouts returned by the API are listed in the Layouts panel (#3151, PR #3217)
+- Clearing or deleting a rack removes the connections that referenced its devices, instead of leaving them orphaned (#3122, PR #3275)
+
+### Security
+
+- The API Docker image and the LXC tarball no longer ship vitest, vite and their dependency tree, which better-auth pulled in as an optional peer (#3205, PR #3274; #3279, PR #3281)
+- The API resolves patched hono (4.13.7). A stale override had pinned 4.12.27, which has known CVEs (#3278, PR #3283)
+- js-yaml 4.3.2 fixes a denial-of-service in YAML parsing (CVE-2026-84375), for layout files parsed in the app and in the API (PR #3270, PR #3248)
+- Docker images are rebuilt on current Alpine packages, clearing util-linux CVE-2026-53612 and CVE-2026-53613 in the web image
+
+### Technical
+
+- A v26.9.0 upgrade-corpus fixture covers the 1.1 schema stamp, signal-typed ports and a slotted container
+- `main` requires a pull request and a passing `validate` check, which now always reports, including on docs-only PRs (#3230, PR #3288)
+- Security Triage dismissals of release image findings open a draft PR adding the `.trivyignore` entry, since the release gate reads only that file (#3231, PR #3276)
+- The type checker enforces the read-only lock: every command availability check must supply the read-only state (#2496, PR #3272)
+- The NetBox import workflow passes inputs as arguments rather than shell text, tightens vendor and slug validation, and uses collision-free branch names (#1283, PR #3273)
+- An empty `container_id` is treated as rack-level consistently across read paths (#3076, PR #3277)
+- Two App dialog tests wait for the bits-ui unmount, fixing unit failures under happy-dom 20.12 (#3219, PR #3282)
+- Dependency updates across hono, jose, js-yaml, wrangler, eslint, typescript-eslint, tsx, @types/node, GitHub Actions, and the production and development dependency groups (24 PRs, PR #3236 through PR #3270)
+
+## [26.8.0] - 2026-08-25
+
+### RACKULA LIVES
+
+For three weeks in August count.racku.la was unreachable. That was not an outage. That was a dormancy. Vampires do this. It is extremely well documented and I am not going to argue about it here.
+
+It came back on Cloudflare, with no origin server left to die. The old one is gone. I do not want to talk about the old one.
+
+### This release
+
+Rackula can now model how your gear is actually wired. Ports carry direction, signal type and connector gender, connections are drawn between them on the canvas, and the device library understands pro audio and AV connectors. This release also moves production hosting to Cloudflare, retiring the server that took count.racku.la offline in August.
+
+### Added
+
+- Connections replace cables. Create a connection between two ports on the canvas, see it drawn as a path, and undo it like any other edit. Connections survive save and load with stable port identity, and are removed automatically when a device is deleted (#369, PR #3113; PR #3116; PR #3118; #639, PR #3114; PR #3115)
+- Ports carry direction, inferred from the interface type where it is not set explicitly (#1930, PR #3111)
+- Ports carry an optional signal type, inferred from the connector and direction (PR #3120)
+- Connector gender is shown for connectors where the convention is unambiguous: XLR by direction per AES14, Speakon always male. DMX XLR is deliberately left blank, since DMX512 reverses the XLR convention (#1944, PR #3121)
+- Pro audio and AV interface types: XLR, TRS, ADAT, MIDI, BNC, DB25, plus the remaining AV types, an AV category, and port colour tokens (PR #3087; #1929, PR #3109)
+- Starter library AV devices carry interface data (PR #3110)
+
+### Changed
+
+- Production is served from Cloudflare Workers Static Assets instead of a VPS. No API, no server-side storage, and no origin server to fall over (#2029, PR #3216)
+- Upgrade action for OIDC deployments: with `RACKULA_OIDC_REDIRECT_URI` unset, Rackula now advertises `RACKULA_BASE_URL` + `/auth/callback` to the identity provider instead of `/api/auth/oauth2/callback/oidc`. If OIDC login was working for you without that variable set, register `https://<your-host>/auth/callback` in your identity provider before upgrading, or pin the old path by setting `RACKULA_OIDC_REDIRECT_URI` explicitly (#3140, PR #3215)
+
+### Fixed
+
+- OIDC login no longer loops until the browser reports `ERR_TOO_MANY_REDIRECTS`. `RACKULA_OIDC_REDIRECT_URI` was documented as defaulting to `RACKULA_BASE_URL` + `/auth/callback`, but that default was never applied, so Rackula advertised a callback path it did not serve and the identity provider's callback was bounced back to the login route (#3140, PR #3215)
+- An OAuth callback arriving on a path Rackula does not serve now returns a 400 naming `RACKULA_OIDC_REDIRECT_URI`, instead of redirecting to login and looping (PR #3215)
+- Better Auth's own callback path, `/api/auth/oauth2/callback/oidc`, is served for deployments whose identity provider is already registered against it (PR #3215)
+- The API warns at startup when `RACKULA_OIDC_REDIRECT_URI` names a path it does not serve, listing the paths that are served (PR #3215)
+- Container-child devices announce their hierarchy to screen readers (#2890, PR #3105)
+- Dragged devices no longer snap to the origin under reduced-motion (#2883, PR #3104)
+- NetBox import writes device definitions and image manifest entries (PR #3106)
+- Undo, redo and restore-from-file are gated under read-only mode (#2804, PR #3079)
+- Muted device colours meet WCAG AA against the label token (#3016, PR #3070)
+- Roving tabindex re-anchors when virtualised palette rows unmount (#3015, PR #3071)
+- `management` accepted as an interface type (#3085, PR #3103, PR #3107)
+- New-layout confirm guard is storage-mode aware (#2801, PR #3080)
+- Toasts clear on sheet open, exempting undo affordances (#3030, PR #3073)
+
+### Technical
+
+- Scheduled soak-smoke against production, and a rollback workflow that bypasses the release approval gate (PR #3098, PR #3216)
+- The self-hosted e2e tier is opt-in, so a missing runner label no longer fails every PR after a 24 hour queue (PR #3207)
+- arm64 Docker images build on native arm64 runners (PR #3083)
+- Release pipeline is idempotent on re-run (#2709, PR #3082)
+- Trivy gates fixable HIGH and CRITICAL findings (#2720, PR #3084)
+- Cable model retired, with a cables-to-connections migration (PR #3119)
+- Upgrade-corpus fixtures allow the migration version stamp, so bumping the app version no longer fails the corpus test (PR #3228)
+- postcss pinned above CVE-2026-73646 in the api image, which also clears the nanoid advisories it pulled in (PR #3228)
+- community-scripts helpers are sourced from ProxmoxVE, after ProxmoxVED moved its engine to community-scripts/core and dropped misc/ (PR #3228)
+- Dependency updates across svelte, hono, wrangler, better-auth, jose, dompurify, eslint and vitest tooling, GitHub Actions, and the production/development-dependency groups, spanning PR #3123 through PR #3225 (~63 PRs)
+
+## [26.7.0] - 2026-07-18
+
+Rackula now warns you before anything destructive, shows clear feedback while you place devices, and lets you save straight from the command palette. Behind the scenes, sign-in and file handling are more secure and the app is more stable overall.
+
+### Added
+
+- Command palette gains rack-save and browser-save commands, and the backup verb is fixed, extending the palette as the app's single command surface (PR #3037)
+- Starter devices with ports now expose interfaces for cabling (#3009, PR #3014)
+- New-rack entry gets a starter template menu, with a mobile "New from template" row (#2829, PR #2834; #2830, PR #2837)
+- Interaction feedback cluster: selection keydown fix, motion polish, and screen-reader announcements added across the canvas (PR #2882)
+- NetBox import maps inventory_items and warns when it hits an unsupported console port (#2941, PR #2962)
+
+### Changed
+
+- Dialog buttons and confirm dialogs unified on CTA design tokens; edit-panel confirmation model and colour contrast unified to match (#3008, PR #3060; PR #3021)
+- Rack controls consolidated into the verb bar; the WelcomeScreen picker is gone, replaced by guarded first-run and zero-rack states (#2822, PR #2832; #2831, PR #2836)
+- Bay affordances gated to empty standalone racks and bay groups; resize handles restyled as edge-midpoint squares (#2823, PR #2835; #2824, PR #2839)
+- Published JSON Schema renamed to the evergreen rackula-layout.schema.json (PR #2863)
+
+### Fixed
+
+- Rack delete now warns when devices are present and every delete path is guarded consistently; a single removal policy applies across all device-removal affordances (PR #3036, PR #3029)
+- Rack duplicate keeps selection and the active rack in sync and fits the copy into view (PR #3035)
+- Focus returns to a stable anchor after palette actions; collapsed accordion content no longer sits in the palette's tab order (#2997, PR #3056; PR #3017)
+- Default rack names auto-number to remove ambiguity; undo of add, duplicate, or delete rack restores the previously active rack, and rack undo no longer restores it unless the action being undone actually activated it (#3002, PR #3058; PR #2961; #2976, PR #2979)
+- Delete confirmation acts on the object it names, not live selection; ConfirmDialog's Enter key only fires on native button activation, so it no longer confirms a destructive action when Cancel is focused, and its guard now covers the close/X button too (#2918, PR #2947; #2919, PR #2949; #2975, PR #2978)
+- Terminology and empty-state copy sweep; first-run notices consolidated and toast stacking fixed; parser and schema errors show plain-language messages instead of raw output (#3007, PR #3059; PR #3031; #2989, PR #3057)
+- Keyboard placement is reliable again; placement preview tracks the pointer with visible confirmation; clicks on device bodies route to placement feedback; occupied and full-slot placement give visible feedback (PR #3034; #2992, PR #3024; PR #3023; PR #3013)
+- Honest placement for half-width oversize devices, with height-matched carriers (#2854, PR #2873)
+- Full-depth placement preview and keyboard input validate the effective face rather than the raw view face (#2925, PR #2953)
+- Mobile touch targets expand to the documented 44px minimum; mobile placement's Cancel button stays reachable at 390px width (#3001, PR #3022; #2991, PR #3012)
+- Dialog autofocus standardised and generated keyboard shortcuts corrected in the help overlay; screen readers announce position and device names; roving-key bubbling and starting_unit display positions fixed (PR #3020; PR #3018; PR #3025)
+- Clicking empty canvas clears selection; share-link entry is guarded when unexported changes exist; opening a file no longer silently replaces the current layout (#3006, PR #3027; PR #3026; PR #3019)
+- Deleting a carrier no longer orphans its children; deleting a placed device no longer leaves dangling cables; legacy 2U carrier adapter fixed (#2911, PR #2916; #2924, PR #2950; PR #2887)
+- Cable endpoints resolve against all racks and survive device-id regeneration on load; migrateLayout and schema position-migration no longer diverge on version-less bodies; unknown and legacy fields survive nested YAML serialization; slugify truncation aligned between frontend and API (#2939, PR #2966; #2923, PR #2965; #2931, PR #2967; #2927, PR #2963; #2932, PR #2969)
+- Stale autosave rollback and uncleared dirty state fixed on availability flip; browser workspace-index writes now serialize under a well-known lock (#2926, #2936, PR #2964; #2930, PR #2954)
+- YAML save no longer sends a charset parameter in its MIME type, fixing the download in Chromium; the object URL used for YAML downloads is revoked only after the click completes; export inlines bundled images and fixes QR/legend overlap while honouring hidden rear (#2986, PR #3011; #2934, PR #2971; #2928, #2929, #2938, PR #2952)
+- Pointer drags can be cancelled with Escape while in progress (#2935, PR #2970)
+- Command palette's device bridge stays visible on a no-match query (#2853, PR #2867)
+- Camera ensures resize and bay targets stay visible after the commit; directional hysteresis added to snapResizeHeight (#2825, PR #2828; #2821, PR #2827)
+
+### Security
+
+- OIDC algorithm now pins to the value returned by provider discovery instead of a hardcoded default; login and import paths cap input size, and cookies are enforced consistently across storage modes (#2942, PR #2982)
+- Fallback CSP added to index.html and login.html; open redirect via a backslash bypass in the login next param closed; global argon2 concurrency cap added against login-flood attacks (#2937, PR #2981; #2917, PR #2946; #2921, PR #2948)
+- YAML complexity guard made bounded and cycle-safe against alias-expansion denial of service, and extended to the snapshot endpoint parse; inflateBounded enforces its size ceiling in decompressed bytes (#2912, PR #2914; #2944, PR #2951; PR #2846)
+- ZIP-extracted images validated by magic bytes and size cap, with writer parity, pre-allocation cap, and extension parity hardened further (#2933, PR #2968; PR #2973)
+- Cloudflare Access misconfiguration no longer fails open on Workers deployment; expression-injection sink closed in the import-netbox workflow inputs (#2913, PR #2915; #2920, PR #2945)
+- Bun release checksum verified before install on LXC; c-ares pinned to >=1.34.8-r0 to resolve CVE-2026-33630 (#2943, PR #2980; #91, PR #3038)
+
+### Technical
+
+- Svelte 5 hot-path audit: Rack.svelte memoized with a dropPreview equality guard, VerbBarOverlay's per-frame poll stopped while a selection is idle, camera animation coordinated into a single tween, drag tooltip mutated in place instead of spread per frame (#2877, #2878, PR #2888; PR #2889; PR #2881; PR #2880)
+- E2E suite recovery: stale and disabled specs triaged and retired, positional-selector and multi-rack gap-fill coverage added, the validate merge gate widened with svelte-check and high-value smoke specs, advisory e2e failure notification and a nightly full-suite run added, E2E and LXC gates moved to pve-prod self-hosted runners (#2851, PR #2862; PR #2865; #2855, PR #2868; #2858, PR #2870; #2857, PR #2869; #2856, PR #2872; #2721, PR #2842; #2697, PR #3055; #2858, PR #3064)
+- Migrated to pako 3.0, a breaking ESM and Inflate API change (#2750, PR #2843)
+- TypeScript 7 adopted in the API; root TypeScript pinned below 7 until typescript-eslint adds support (PR #2902; PR #2955)
+- Brand pack contribution guide added, simplifying pack registration (PR #3044)
+- Design docs written ahead of implementation: UI friction and consistency review (PR #2985), resize and bay corrections spec (#2820, PR #2826), interaction feedback cluster plan (PR #2866), e2e suite recovery plan (PR #2860)
+- Dependency updates across svelte, hono, wrangler, @cloudflare/vitest-pool-workers, eslint and vitest tooling, GitHub Actions, and the production/development-dependency groups, including nanoid 6.0.0 and fuse.js 7.5.0 (PR #3053), spanning PR #2817 through PR #3054 (~35 PRs)
+
+## [26.6.6] - 2026-06-30
+
+I barely noticed the number, honestly. Shipped 6.6.4 Saturday, 6.6.5 Monday, this one today, didn't even clock it, that's just how fast we move, we're a fast team, I don't count. (Hail Satan.) Anyway, racks get created and resized directly on canvas now, no wizard, one command palette instead of the app menu. I do not think about the version. I've thought about it less than you have, and you just brought it up.
+
+Genuinely though: we're proud of this UX overhaul, and it's still a work in progress. Controls are finding their corners, a few pieces are propped against the wall, and things may shift again before they settle. Bear with us while we rearrange the furniture.
+
+### Added
+
+- Create a new rack directly on canvas, without the creation wizard (#2732, #2748)
+- Racks lay out in a single bottom-aligned row (#2733, #2751)
+- Rack width is selectable (10/19/21/23), with the frame drawn to scale (#2736, #2762)
+- Drag-resize a standalone rack, snapping to whole U with no renumbering (#2737, #2765)
+- Reorder the selected rack with move-left / move-right (#2734, #2763)
+- Rack inspector exposes depth, base weight, width, and form factor (#2738, #2749)
+- Inspector switches between rack mode and device mode depending on what's selected (#2739, #2757)
+- Create and extend a bay from the canvas, with a resistant edge-drag gesture (#2740, #2766)
+- Remove a rack from a bay, closing the row (#2741, #2768)
+- Settings toggle to enable or disable the bayed-rack affordances, on by default (#2813)
+- Command palette becomes the single command surface: unified palette projection and grouping, a toolbar search pill, explicit open state, per-context availability, and a device sub-mode; the app menu and mobile menu sheet are gone (#2775, #2776, #2777, #2778, #2779, #2800, #2803)
+
+### Changed
+
+- Canvas controls split into two corners: undo/redo history anchors to the upper-left, the zoom/view pill stays lower-left (#2697)
+- New Rack wizard removed; every new-rack entry point now creates a rack directly on the canvas (#2747)
+- Help overlay drops shortcuts already listed in the command palette and links to the keyboard-shortcuts docs (#2808)
+
+### Fixed
+
+- Command palette list stays scrollable with the footer visible on first open (#2807)
+- Bay exposes a single top-edge resize handle instead of one per member rack (#2740, #2767)
+- Banana-for-scale reference bottom-aligns with the rack (#2806)
+- Deleting a device after switching the inspector into rack mode no longer leaves a stale post-condition, so the flaky smoke test is deterministic again (#2799, #2802)
+- Empty resize-target rack ids are guarded in RackCanvasView instead of throwing (#2794)
+- Legacy U-position migration handles devices with an empty-string container_id (#2756)
+- YAML save preserves PlacedDevice label, ports, and colour override, rack show_rear, and cleared images (#2760)
+- Device library items alphabetize consistently within brands and categories (#2723, #2745)
+- A-Z device list fills the panel height instead of stopping short (#2698, #2717)
+
+### Security
+
+- Archive imports enforce size and compression-ratio limits before decompression, closing a decompression-bomb vector (#2758)
+
+### Technical
+
+- Cloudflare Workers entry point and an argon2-free auth bundle for the Workers runtime, continuing the M018 migration groundwork (#2626, #2706)
+- Per-form-factor rack frame chrome from #2752 disabled after it drew canvas artifacts; racks fall back to a single generic frame with the data path kept (#2805)
+- Dracula-pink editor highlights tokenized via semantic aliases in tokens.css (#2743)
+- Regression coverage added for rack-resize boundaries and redo, active-rack fallback, archive-guardrail boundaries, DeviceCategorySchema firewall and chassis, and the container_id migration heuristic; full E2E specs reconciled with direct on-canvas rack creation (#2761, #2795, #2796, #2797, #2798)
+- Code-quality autofixes applied across the tree (#2718, #2719, #2724, #2725)
+- CI auto-formats PRs to prevent dependency-bump format drift (#2731)
+- Repo reformatted for prettier 3.9.3 (#2726)
+- Prod smoke-test made resilient to a stale self-hosted workspace (#2728, #2729)
+- Milestone convention reconciled in the GitHub workflow doc (#2727)
+- Release and distribution architecture decision spec documented (#2722)
+- Dependency bumps: wrangler, better-auth, @cloudflare/vitest-pool-workers, js-yaml, eslint group, GitHub Actions group, production-dependencies group (lucide, js-yaml, simple-icons; pako held), development-dependencies group (#2711, #2712, #2713, #2714, #2715, #2770, #2771, #2772, #2773)
+
+## [26.6.5] - 2026-06-29
+
+A stability and hardening release. Undo and redo resolve devices by id now, so the right device is affected after re-ordering. We fixed the undo bug. There was never an undo bug. Malformed or oversized layout files are caught at every read door instead of corrupting your work, and the rest is security hardening, storage-layer groundwork, and technical-debt paydown.
+
+### Fixed
+
+- Undo and redo resolve the target device by id, so redo deletes or edits the right device after an undo re-appends it (#2656, #2665)
+- No-op colour or face updates no longer run a command and wipe the redo stack (#2660)
+- Loading a layout clamps rail devices that extend above the rack back within bounds (#2661)
+- Malformed browser-workspace and autosave bodies are validated through the schema and forward-compat version gate instead of crashing startup (#2657, #2664)
+- NetBox-imported device types are validated and deduped, so an invalid u_height or slug can no longer destroy the autosave on reload (#2655)
+- Storage popover z-index, verb-bar anchoring in dual view, and toast placement (now bottom-centre) corrected (#2637, #2645, #2646)
+- Share-link decode no longer throws a Data-to-string type error (#2686)
+- Rail positions are guarded as whole-U integers at the place and move chokepoints (#2667)
+
+### Security
+
+- Share-link decode is bounded by input and decompressed size to prevent a decompression-bomb denial of service (#2658)
+- API rate limiting hardened: OIDC login initiation is throttled and spoofable client-IP headers are no longer trusted by default (#2659)
+- hono override aligned to ^4.12.27 to clear CVE-2026-54290 (#2650)
+
+### Removed
+
+- Dead octocov coverage-badge workflow (The Count's Code Census) and its config. It had been disabled since January 2026, never ran again, and published badge JSON that nothing in the repo referenced. The orphan report/badges branch and its protecting ruleset were removed too (#2651)
+- Verified dead code with zero call sites, nine items (#2669)
+
+### Technical
+
+- Storage driver interface with a per-request dependency-injection seam, an R2 storage driver, and a runner-agnostic contract harness, laying the groundwork for the Cloudflare migration (#2624, #2625)
+- Decomposed three oversized modules: schemas/index.ts, yaml.ts, and archive.ts (#2668)
+- Device-type import ingress routed through DeviceTypeSchema (#2666)
+- Filename-slug sanitization consolidated through slugify(), URange deduped (#2670)
+- ESLint regression guards added for {@html} and raw web storage outside the storage seam (#2672)
+- Self-host header and build-env parity guard added to CI (#2032)
+- Pre-commit prettier resolved via node module resolution so it no longer fails open in worktrees (#2639)
+- Stale and flaky e2e tests aligned to shipped behaviour: mobile top bar, device labels, dual-view FRONT/REAR selectors, single-face migration counts (#2680)
+- Leftover sparse-checkout cleared in the prod smoke-test job, dev-first M018 Cloudflare migration plan documented (#2674)
+
+## [26.6.4] - 2026-06-27
+
+A large usability release. The workspace is rebuilt around the canvas, and the storage layer is rebuilt to stop silently losing work. The rest is targeted fixes and technical-debt paydown that make the app faster to work in and more reliable. You can trust it with your data now. Please. It would mean a lot.
+
+### Added
+
+- Command palette is the search input for commands: one box runs any action or finds any device, opened from the toolbar search pill or with Ctrl+K, with recents, a selection-aware empty state, device search, and click-to-place on desktop (#2212, #2213, #2214, #2341, #2352)
+- Tabbed side panel replaces the single edit panel: Layouts, Racks, and Devices tabs, contextual properties on the Edit tab, display toggles on the View tab, collapsible (#2076, #2077, #2078, #2082)
+- Floating verb bars put context actions next to the selected device or rack, including a slot control for half-width devices (#2075, #2322, #2334, #2344)
+- Layouts library lists every saved layout with cached previews, opened and managed from the sidebar (#2082, #2083, #2325)
+- Open layouts persist as toolbar tabs and restore lazily on launch (#2079, #2080, #2324)
+- Top bar reduced to workspace chrome (logo, app menu, layout name, storage status, settings); view and history controls relocated to a floating cluster at the canvas bottom-left, where the cursor already is (#2072, #2073, #2074, #2187)
+- App menu behind the Rackula mark is now the main menu: reorganized by intent, with the menu-item registry contract completed, group headings renamed for clarity, dividers between groups, and a mobile sheet that renders the same projection (#2596, #2597, #2602, #2611)
+- Settings dialog consolidates Appearance, Behaviour, and Data options (#2093)
+- Device palette gains favourites, list virtualization for large libraries, and an image on/off toggle (#2094)
+- New layouts open to a template picker instead of a blank canvas; the standalone StartScreen is gone, with entry routed through the sidebar and app menu (#2081, #2095)
+- Export-all renders every layout with per-mode framing in one pass (#2045)
+- Carrier device types host half-width and sub-U gear directly, replacing the fractional-rail model so sub-U placement is predictable (#2158, #2289, #2291, #2159)
+- Storage status chip in the toolbar shows save state at a glance, with the storage location inline and a last-save details popover on hover or tap (#2035, #2446, #2640)
+- Moving browser-stored layouts to server storage prompts before overwriting an existing server copy (#2608)
+- Pre-overwrite snapshots are taken server-side with conflict detection; the Load dialog lists and restores them (#2040, #2041, #2042)
+- Backup nudge tracks changes since the last export and warns before they are discarded, with a restore-from-file confirm step (#2034, #2038, #2039)
+- Custom device images embed as base64 in the YAML save, so one file round-trips with its images (#617)
+- Layout JSON Schema generated from the Zod schema for editor validation, under a documented versioning and compatibility policy (#1113, #2226)
+- Full-depth devices render and collide on both rack faces, so a device stored facing front also occupies and shows on the rear (#2337)
+- Keyboard alternative for placing devices, so a device can be added without a pointer (#106)
+- Device images show a load placeholder, fade in when ready, and raise a toast on failure, with accessible alt text
+- Create-custom-device promoted to a labelled button at the foot of the device palette (#2556)
+- Hover-revealed edge grip on the panel seam as a second way to collapse a side panel
+- Verb-bar and canvas-control tooltips are sourced from the command registry, so labels and shortcuts stay in step
+- MikroTik CSS326-24G-2S+RM and CSS610-8G-2S+IN switches added to the device library (#1581)
+
+### Changed
+
+- Persistence runs through one storage interface with an explicit, injected mode, replacing runtime probe-and-guess (#2027, #2036, #2037)
+- A twin-tab guard stops two open tabs from overwriting the same working copy, with placement images namespaced per layout (#2044, #2270)
+- Unknown top-level sections in a layout file survive a save instead of being dropped (#2208)
+- Sidebar tabs ordered Layouts, Racks, Devices (#2326)
+- Zoom snaps to round ladder rungs (#2336)
+- Edit panel resolves device brand from the authoritative library; category names shown in singular (#2217, #2218, #2219)
+- Display-mode toggle icon redesigned for clarity (#2335)
+- Coffin-tapered mark adopted as the canonical logo (#2048)
+- Rack PDUs modelled as shallow power bars that render in rear view (#2337)
+- App light theme (Alucard) removed; Rackula is dark-only (#2468)
+- Edit and View tab strip unified with the sidebar's segmented-control style (#2600)
+- flip-device-face verb uses a transition-right glyph for clarity (#2400)
+- The API validates a layout against the JSON Schema before persisting it (#2449)
+
+### Fixed
+
+- Devices keep their container across same-rack and cross-rack moves, nudges, and YAML export; stale links are cleared on move (#2127, #2128, #2129, #2131, #2135, #2224)
+- Keyboard nudge no longer ejects a contained device from its container (#2146)
+- Undo and redo bind to the correct rack and no longer throw on deleted racks (#2126)
+- In-progress device name edits stay attached to their device (#2223)
+- Rack height input reverts when a bayed rack rejects the resize (#2222)
+- Half-U stacking works again for 0.5U devices (#2152)
+- NetBox import validates enum and interface fields instead of casting blindly (#2119, #2122)
+- Export download no longer races object-URL revocation (#2201)
+- Layout loads remap rack groups and container IDs in a two-pass load (#2155)
+- Placement images survive server reconciliation and YAML round-trips (#2220, #2225)
+- Layouts mark clean after a debounced auto-save (#2057, #2058, #2061, #2084)
+- Snapshot data loss closed with strictly monotonic updatedAt and a per-layout write lock (#2067, #2233)
+- Muted-text and QR-brand contrast raised to WCAG AA, nested-interactive controls flattened, and canvas racks given a listbox parent so axe WCAG AA passes (#2255, #2256)
+
+### Security
+
+- CSV export escapes spreadsheet formula injection (#2200)
+- Patched libssl3 and libcrypto3 for CVE-2026-45447 (alerts #80-83)
+- Automated security-alert triage via Claude Code (#2357)
+- Pinned libexpat to >=2.8.1-r0 in the deploy image for CVE-2026-45186 (#2562)
+
+### Technical
+
+- Type checking restored across the utils, storage, and component layers; the last @ts-nocheck surfaces are gone (#1705, #2104, #2105)
+- Layout store decomposed into per-layout instances behind a facade, with rack and device logic split into domain action modules; Canvas coordinate math and markup extracted; export.ts and EditPanel.svelte split into focused modules (#1077, #1080, #1396, #1398, #1610, #2024, #2025)
+- E2E suite reworked: two-tier model with an environment approval gate, 4-way sharding, assertion-based waits, and role/label selectors, plus new undo/redo and accessibility coverage (#1227, #1231, #1420, #2002, #2003)
+- Regression gates added: visual-diff tripwire, axe-core accessibility checks, a bundle-size budget, and a ban on CSS-class selectors in tests (#1423, #2098, #2099, #2185)
+- Upgrade-safety net so a self-hosted deployment can take new images without losing saved data: prior-release layouts load through the real parse path in a self-discovering fixture corpus with silent-loss detection, plus a fail-closed release guard; the Docker upgrade smoke drives the compose stack from the previous released image to the new build against the same volume and confirms the saved layout survives byte-for-byte (#2448, #2515)
+- i18n deferred to M011; the orphaned Paraglide runtime removed (#2184)
+- Dev tooling hardened: cloud-safe superpowers bootstrap, worktree-aware main-edit guard, POSIX husky hooks, the /orchestrate-issues command, and pre-push gate fixes (#2102, #2288)
+- Upgrade corpus exercises the loadLayout path with v0.6 single-rack YAML fixtures (#2450, #2451)
+- Vendor asset directories normalized and the generic device library split from brand packs (#2552)
+- @testing-library/svelte pinned to 5.3.1 to restore runes compatibility in the unit suite (#2587)
+- SPA entry document revalidated on deploy so a stale cache stops serving the old build (#2599)
+- DCO sign-off section added to CONTRIBUTING (#2559)
+- Research spikes: accurate depth model for M021 (#2622) and Cloudflare Workers Static Assets for #2029 prep (#2620)
+- Dependency updates across the production, development, vitest, eslint, and api groups
+
+## [26.6.3] - 2026-06-08
+
+For a while, the way Rackula got released was: someone pushed a tag and hoped. Nobody deployed the LXC install on an actual container first. They just believed in it. That is how v26.6.2 shipped an install that could not start on an unprivileged container, which is the default. We found the guy who did that. It was me. @ggfevans.
+
+So now a release does not ship until it proves it works. Every release goes through a gate: it builds the images, brings them up under Docker and confirms they are healthy, then installs the real thing onto a throwaway Proxmox container and smoke-tests it. If any of that fails, nothing gets promoted and the last good release stays exactly where it is. Nobody pushes to prod and hopes anymore. Not even @ggfevans. Especially not @ggfevans.
+
+And it is only getting stricter. End-to-end browser testing is in the works, so before long a release will have to survive being clicked through by a robot before it is allowed out. The walls are closing in. On @ggfevans.
+
+There was also a thing watching how you used the app. Umami. Counting things. It is gone now: out of the code, out of the deploy config, out of the docs. Nobody is keeping track of you in here. It is just you and the rack.
+
+### Changed
+
+- Release pipeline is now gated: stage as a prerelease, validate on real targets (Docker compose health plus an LXC smoke test on a throwaway unprivileged container), and promote only if every gate passes. A failed gate promotes nothing, so `:latest` and prod always point at the last known-good release (#1977)
+
+### Added
+
+- Release-free dev build mode for LXC payloads, so the install can be tested without cutting a release (#1959)
+- Reusable LXC smoke-test with a Proxmox API driver, used by the release gate to deploy and verify on a real container (#1967, #1982)
+
+### Fixed
+
+- LXC deploy: unprivileged containers now work correctly; Bun runtime, nginx, systemd hardening, and data-safe update paths are all compatible with unprivileged CTs (#1961, closes #1969)
+- LXC community-scripts: aligned with ProxmoxVED conventions and hardened build-lxc checkout (#1953, PR #1966)
+- LXC install: unzip is now installed before use and the Bun installer fetch is more resilient (#1933, PR #1934)
+- Accessibility: autofocus warning on layout name input resolved (#1896, PR #1963)
+- Even spacing between toolbar button clusters (#1962)
+- Cross-rack device moves now re-key placement images correctly so images are not lost after a move (#1478)
+- CI: deploy-dev path filter repaired so pushes to main trigger the dev deployment again (#1924, PR #1925)
+
+### Removed
+
+- Umami analytics removed entirely from source code, deployment config, and documentation. No client-side analytics ship with Rackula anymore (#1972, #1973, #1975; PRs #1978, #1979, #1981)
+
+## [26.6.2] - 2026-06-05
+
+Maintenance release: release tooling and API dependency hygiene, plus an export fix and KWS device-library corrections.
+
+### Changed
+
+- KWS device library: corrected module widths and depths, dropped U-height from module names, and added magnetic patch panels (#1912)
+
+### Fixed
+
+- Export: clipPath IDs are now unique across racks, faces, and devices, preventing collisions in multi-rack dual-view exports (#1904, PR #1911)
+
+### Technical
+
+- Release tooling: contributors.sh is now portable to macOS BSD tools and bash 3.2, so the per-release contributor block is written when /release runs locally (#1907, PR #1923)
+- API: consolidated dependencies on Bun, removed the unused npm lockfile, and added a Dependabot bun ecosystem entry for /api (#1914, PR #1916)
+- API: package version is now aligned by the release flow (#1915, PR #1917)
+- Dependency updates: svelte, fuse.js, @types/node, and grouped GitHub Actions updates, plus api typescript and zod bumps (#1913, #1921, #1920, #1922, #1919, #1918)
+
+## [26.6.1] - 2026-06-05
+
+The LXC release. For real this time. v26.6.0 proudly shipped a self-contained container and then forgot to install the runtime that actually runs the API, so the service never started. We shipped a box with no engine. Mortifying. This is the one that boots: the Bun runtime is installed, the API comes up, and /health answers. You wanted working LXC? You finally have working LXC.
+
+### Fixed
+
+- LXC install now installs the Bun runtime, so the API starts. v26.6.0 containers shipped without a JS runtime and the API service could not start (#1909, PR #1910)
+
+### Changed
+
+- LXC install and update scripts brought into community-scripts convention compliance: the update path uses fetch_and_deploy_gh_release instead of custom download logic, and custom SHA256 verification is removed from the scripts. The release still publishes a SHA256 asset; the scripts rely on the deploy helper and HTTPS (#1908, PR #1910)
+
+## [26.6.0] - 2026-06-05
+
+You wanted LXC?! You GOT LXC. The Proxmox VE deployment is production-ready, baby: Rackula installs as one self-contained Debian 13 container, web frontend and persistence API riding together, now on arm64 AND x86-64, with a SHA256-verified tarball because we are not handing you an unverified tarball like some kind of clown. You asked for the container. We made the container. It's the LXC release.
+
+### LXC deployment
+
+- arm64 support: the release tarball bundles the arm64 native binary and the install advertises arm64 (#1850, PRs #1852 and #1906)
+- SHA256 verification for the release tarball (#1891, PR #1894)
+- update_script rollback hardening and install idempotency (#1851, PR #1854)
+- Hardened the release workflow against shell injection and split it into read-only build and write-only publish (#1897, PR #1898; #1899, PR #1900)
+- Corrected notes format in rackula.json (#1213, PR #1831)
+
+### Added
+
+- Firewall device category (#1833, PR #1835)
+- Port type categorization for network, power, and console ports (#1836)
+- KWS 10-inch homelab rack brand pack, contributed by @ilanKushnir (#1837)
+- Onboarding hint shown when a rack has no devices (#1827)
+- Haptic feedback on touch selection, with a thicker selection outline on mobile (#1883)
+- Rack height slider in the new-rack wizards (#756, PR #1865)
+- API write-route rate limiting for self-hosted deployments (#1778, PR #1828)
+- API explicit mutating-request origin policy (#1779, PR #1830)
+- API storage abuse guardrails: per-layout quota and retention (#1780, PR #1875)
+
+### Changed
+
+- Save confirmation moved from the toolbar indicator to a toast, removing the toolbar layout shift (#1901, PR #1903)
+- Storage quota rejections surfaced with clear, actionable messaging (#1390, PR #1893)
+- Mini-PC devices moved from the Generic library into dedicated brand packs (#1840, PR #1844)
+- API adopts pino structured logging with levels (#1888, PR #1892)
+
+### Fixed
+
+- Device placement images now render in exports, matching the editor (#1902, PR #1905)
+- Auto-import undo no longer removes shared device types (#1479, PR #1859)
+- Device palette: chassis added to category order, drift-proofed against future omissions (#1839, PR #1849)
+
+### Security
+
+- Patched libxml2 CVE-2026-6732 by busting the apk-upgrade layer cache (#1841, PR #1843)
+- Dependency security updates: better-auth and dompurify (#1885, #1879)
+
+### Technical
+
+- OIDC behind a reverse proxy documented and verified (#1832, PR #1845)
+- arm64 native-dependency load verified on a native arm64 CI runner (#1850, PR #1906)
+- Automatic per-release contributor acknowledgements (#1876, PR #1889)
+
+## [26.5.0] - 2026-05-29
+
+First CalVer release. Rackula has moved from SemVer (0.MINOR.PATCH) to Calendar Versioning (YY.M.MICRO). Future versions follow the format YY.M.MICRO where YY is the 2-digit year, M is the unpadded month, and MICRO is the release counter within that month (starting at 0).
+
+### Changed
+
+- Migrated from SemVer (0.MINOR.PATCH) to CalVer (YY.M.MICRO) versioning (#1315, #1808, PR #1816)
+
+### Fixed
+
+- LXC installation script: community-scripts compliance, security hardening, and reliability fixes (#1211, PR #1797)
+- Bun installer pipe suppressed by $STD wrapper in LXC script (PR #1817)
+- LXC install script: apt replaces apt-get for community-scripts compatibility (PR #1800)
+
+### Technical
+
+- CalVer release tooling: version script, deploy workflow, /release skill, and CI config (#1803-#1806)
+- CLAUDE.md versioning policy rewritten for CalVer (#1807, PR #1812)
+- README refreshed for FOSS professionalism (#1353, PR #1818)
+- Writing style directives: no em dashes, no emoji in docs, succinct language (#1353, PR #1820)
+- Deploy config parity safeguards and scripts documentation (PR #1799)
+- Root config tidying: Playwright configs, env examples (PR #1798)
+- Repo root cleanup: empty dirs, orphaned files, AI doc consolidation (PR #1796)
+- Bump eslint 10.4.0 to 10.4.1 (PR #1801)
+
+## [0.10.1] - 2026-05-29
+
+### Added
+
+- Make YAML the default save format (#619, PR #1754)
+- Refit canvas on device orientation change in mobile mode (PR #1751)
+
+### Fixed
+
+- Half-width devices independently selectable at same U position (#1680, PR #1773)
+- Enable mouse/pointer tap-to-place in mobile mode (≤1024px viewport) (#1757, PR #1760)
+- Canvas fills full window in mobile mode (#1764, PR #1765)
+- E2E specs updated for YAML default save format (#1767, PR #1768)
+- Verify live frontend version only on no-API prod (#1770, PR #1771)
+- Remaining full-E2E failures — android long-press context menu + starter-library search (#1769, PR #1776)
+
+### Security
+
+- Remove Stryker mutation testing, fix CVE-2026-8723 (qs dependency) (#1774, PR #1775)
+
+### Technical
+
+- E2E regression tests for mouse tap-to-place in mobile mode (#1762, PR #1763)
+- NPM library feasibility & LOE spike documentation (#1758, PR #1761)
+- Scope deploy-dev.yml to relevant paths only (PR #1772)
+- Dependency bumps: dompurify, eslint-plugin-svelte, svelte, @lucide/svelte
+
+## [0.10.0] - 2026-05-26
+
+### Added
+
+- Right-click context menu for custom devices in the device palette (#1701)
+- Persist viewport zoom/pan across page reloads (#118)
+- Share URL length warning at 1800 chars with a download-layout-file fallback (#1720)
+- Validate interface positions on half-depth device types (#254)
+- Layouts navigation in the File Menu and mobile toolbar (#1722)
+- Vector PDF export for AutoCAD compatibility (#1731, PR #1734)
+- Cross-rack device drag-and-drop (#1592, PR #1744)
+
+### Changed
+
+- Replace pako with lz-string for share-URL compression (#1718)
+
+### Fixed
+
+- Sync U-numbering settings across bayed rack groups (#1520, PR #1702)
+- Convert position from internal units in the resize validator (#1683, PR #1695)
+- Sync layout name to the first rack on creation (#1481, #1482, PR #1687)
+- Clean up cables when a device type is deleted (#1483, PR #1693)
+- Skip pointer drag events outside rack SVG bounds (#1467, PR #1690)
+- Respect per-device face in PNG export filter (#1681, PR #1682)
+- Respect half-width slot_position in PNG export (#1660, PR #1679)
+- Drop legacy AUTH*\*/API*\* env-var fallbacks in the api (#1692)
+- Recover slot_position and slot_width for half-width pairs on load (#1602, PR #1704)
+- Fix OIDC auth redirect port when behind a reverse proxy (#1714)
+- Right-click context menus now open at the cursor instead of the top-left origin (#1725, PR #1726)
+- Reduce text stroke-width and remove unsupported paint-order (PR #1737)
+- PDF export rendering regressions — bay labels duplicated in bayed racks, structural labels render in serif font, device names offset upward (#1738, #1739, #1740, PR #1741)
+
+### Security
+
+- Resolve all 7 open Trivy code-scanning alerts on the api image by bumping better-auth 1.5.1 → 1.6.2 (#1676), removing/upgrading vulnerable transitive deps: kysely (CVE-2026-44635, -33468, -32763), defu (CVE-2026-35209), lodash (CVE-2026-4800), effect (CVE-2026-32887), drizzle-orm (CVE-2026-39356)
+- Patch hono + defu dependency CVEs in the api (#1691)
+- Add `base-uri 'self'` to Content-Security-Policy headers (#1723)
+- Bump qs 6.15.1 → 6.15.2 (#1721)
+
+### Technical
+
+- Enable TypeScript strict mode on the frontend (#1609, PR #1709)
+- Split api security.ts into focused modules (#1611, PR #1689)
+- Introduce mountWithAlias helper for /api/\* route aliases (#1684)
+- On-demand Trivy security scan workflow aligned with deploy-prod (#1675)
+- Post-release version-alignment test across published Docker images (#1728, PR #1730)
+- Dev deploy workflow fails loudly if data dir not writable by uid 1001 (#1742)
+- Disable binfmt cache to fix parallel cache-save collisions in CI (#1688)
+- Resolve a CodeQL code-quality finding (#1703)
+- Dependency bumps: svelte, vitest, tsx, marked, @types/node, eslint, typescript-eslint, and the production/development/actions dependency groups
+
+## [0.9.5] - 2026-05-15
+
+### Added
+
+- FS.COM brand pack with 4 switches (S8050-20Q4C, S5850-32S2Q, S5850-24S2Q, S3410-10TF-P) and 4 missing Netgear models (XSM7224S, GS752TXS, M4350-32F8V, M4350-24X8F8V) — first-time contribution from @churtado-tech (#1662)
+
+### Fixed
+
+- Claude code review workflow on fork PRs — use `pull_request_target` then revert to `pull_request` with fork skip (#1669, PR #1670, PR #1671)
+- Code quality findings from CodeQL/Copilot analysis (#1639, #1640)
+
+### Security
+
+- Patch Alpine packages in api Dockerfile to resolve CVE-2026-31789 (OpenSSL heap buffer overflow) and clear 7 related Alpine HIGH CVEs blocking the prod deploy gate (#1672)
+
+### Technical
+
+- TypeScript 5.9.3 → 6.0.3 (#1635)
+- Svelte 5.55.5 → 5.55.7 (#1667)
+- kysely 0.28.14 → 0.28.17 in /api (#1654)
+- Update CodeQL action version and exit code
+- VPS migration research documentation
+- Dependency bumps: @types/node, fast-uri, @eslint/compat, @vitest/eslint-plugin, typescript-eslint, and production/development dependency groups
+
+## [0.9.4] - 2026-05-01
+
+### Added
+
+- Separate layout naming from rack naming — layouts and racks can now have independent names (#1005)
+
+### Fixed
+
+- Device type auto-import integrates with command system for proper undo/redo (#1470)
+- Batch auto-import with placement command for atomic undo/redo
+- Context menu move up/down now checks collisions (#1462, PR #1504)
+- Unique SVG pattern IDs per rack instance to prevent cross-rack rendering conflicts (#1466, PR #1505)
+- Auto-detect IPv6 availability to prevent nginx startup failure (#1516, PR #1527)
+- Show error/warning toasts for device import failures (#1391, PR #1506)
+- Preserve slot_position and slot_width in YAML serialization (#1564, contributed by @lorenzowood)
+- Guard preset shortcuts when custom-height input is focused in new-rack wizard (#1580, PR #1604)
+- Double bay device selection (#1522, PR #1545)
+- Storage resilience — use safeStorage for all web storage access (#1392, PR #1530)
+- Make nginx DNS resolver configurable for Kubernetes (#1535, PR #1538)
+- Drop broken `npm install -g npm@11` from Dockerfile that broke dev/prod image builds (follow-up to PR #1600)
+
+### Security
+
+- Fix escape order in NetBox importer to prevent double-escaping, scope CodeQL to src (#1595, PR #1601)
+- Bump hono to 4.12.14 and dompurify to 3.4.0, closing 7 CVEs (#1594, PR #1596)
+
+### Technical
+
+- Decompose App.svelte and Rack.svelte into rendering and interaction layers (#1395, #1451)
+- Extract drag-drop and context menu logic from Rack.svelte
+- Centralise E2E CSS selectors into locators.ts (#1458)
+- E2E test suite recovery — 58 failures resolved (#1508)
+- Remove root npm package-lock.json (project uses bun) (#1603)
+- Dependency updates: Svelte 5.55.5, Vite 8.0.10, marked 18.0.2, hono 4.12.14
+
+## [0.9.1] - 2026-03-10
+
+### Added
+
+- Multi-rack share URL support with v2 schema (#1207, PR #1417)
+- Session save flush on pagehide/beforeunload to prevent data loss (#1404, PR #1413)
+- Reverse proxy, access control, and deployment scenario documentation (#1107, PR #1411)
+
+### Fixed
+
+- Cross-browser drag tooltip positioning for Safari 26 and Firefox 148 (#1443, #1444, PR #1446)
+- Circuit breaker reactivity and health-check reset for persistence auto-save (#1088, PR #1416, PR #1434)
+- Surface user-facing feedback for previously silent failures (#1389-#1392, PR #1407)
+- Keyboard viewport input type coverage using allowlist instead of exclusion list (#1115, PR #1408)
+- Pin Bun 1.3.10 in Dockerfile and regenerate lockfile
+
+### Technical
+
+- Migrate E2E selectors to data-testid (#1228, PR #1435)
+- Repair migration E2E tests and archive format detection (#1401, PR #1437)
+- Rewrite shelf-category E2E tests for accordion palette (#1400, PR #1406)
+- Unskip device-name undo/redo and cross-rack metadata E2E tests (#1405, PR #1436)
+- Eliminate waitForTimeout in E2E tests (#1224, PR #1414)
+- Update stale E2E selectors and save filename assertions (#1261, #1263, PR #1412, PR #1415)
+- Triage and fix disabled E2E tests (#1226, PR #1439)
+- E2E testing architecture research spike (#1393, PR #1424)
+- Trim SPEC.md from 2,482 to 184 lines (#1399)
+- Dependency updates: Svelte 5.53.9, Hono 4.12.7, DOMPurify 3.3.2, simple-icons 16.11.0
+
+## [0.9.0] - 2026-03-05
+
+### Added
+
+- Local authentication mode with username/password login (#1117, PR #1356)
+- Move compatible-only toggle from device palette to Settings menu (#1361, PR #1379)
+
+### Fixed
+
+- Export dialog preview clipped for tall racks (#1350, PR #1380)
+- Defence-in-depth guards for duplicate device IDs preventing layout load (#1363, PR #1378)
+- Stale auth documentation referencing removed environment variables (#1102, PR #1373)
+- Restore Trivy scan gating in deploy-prod workflow (#1360, PR #1381)
+
+### Security
+
+- Reject control characters in `normalizeNextPath()` to prevent CRLF injection (#1371, PR #1382)
+- Require OIDC issuer pinning when discovery URL is configured (#1372, PR #1382)
+
+## [0.8.5] - 2026-03-01
+
+### Added
+
+- Unified layout loading pipeline with LoadDialog for consistent file handling (#1348, PR #1351)
+- YAML editor panel with conflict detection for advanced layout editing (#1324)
+- Compatible-only palette override for narrow racks (#1330, PR #1342)
+
+### Fixed
+
+- Restore Save As dialog with browser-fs-access for native file picker support (#1344, PR #1355)
+- Add missing browser-fs-access dependency that broke builds (PR #1358)
+- Restore deny-by-default auth gate behaviour (#1333, PR #1337)
+- Align nginx auth contract with API auth endpoints (#1332, PR #1339)
+- Remove stale optional auth context path (#1334, PR #1338)
+- Enforce idle-timeout for fallback OIDC sessions (#1341)
+- Support Entra common issuer discovery for OIDC (#1340)
+- Custom device creation UX and phantom layout auto-save (#1327)
+- Clear validation errors on input and add success toast for device creation (#1316)
+- Allow whole number heights for custom devices (#1307, PR #1308)
+
+### Security
+
+- Remediated libpng heap buffer overflow CVE-2026-25646 in frontend container image
+- Upgraded hono to 4.12.2+ to fix authentication bypass CVE-2026-27700 in API container
+
+### Technical
+
+- Pin Trivy version in deploy-prod workflow to avoid setup-trivy git clone failures
+- Tiered CI testing strategy (PR #1311)
+- Harden deploy-prod with tag validation gate (PR #1318)
+- Tighten Claude workflow trust boundary (PR #1319)
+- Make octocov non-mutating with badges branch (PR #1320)
+- Replace weekly issue spam with rolling health report (PR #1321)
+- Add label taxonomy with sync workflow and backfill script (PR #1322)
+- Harden false-positive e2e assertions (#1229, PR #1303)
+- Rewrite responsive e2e tests to match current toolbar UI (#1347, PR #1349)
+
+## [0.8.4] - 2026-02-20
+
+### Fixed
+
+- Prevented container startup crash in persist deployments caused by unresolved `AUTH_MODE` values rendering invalid nginx config (`unknown "auth_mode" variable`) (#1297)
+- Normalized auth mode at container entrypoint and restricted nginx auth-mode mapping to sanitized `RACKULA_AUTH_MODE` values (`none|oidc|local`) with safe fallback to `none`
+
+### Security
+
+- Remediated open Dependabot alerts by upgrading vulnerable dependencies: `jspdf` to `4.2.0`, `svelte` to `5.53.0` (with patched `devalue` `5.6.3`), and `hono` to `4.12.0`
+
+## [0.8.3] - 2026-02-20
+
+### Fixed
+
+- Production deploy workflow now keeps Trivy SARIF gating aligned with configured severity (`HIGH,CRITICAL`) via `limit-severities-for-sarif`, preventing medium/low advisories from blocking deploy
+
+## [0.8.2] - 2026-02-20
+
+### Technical
+
+- Recut release after the `v0.8.1` deploy workflow was cancelled during `build-persist`, to republish `persist` and `v0.8.2-persist` container tags
+
+## [0.8.1] - 2026-02-17
+
+### Added
+
+- Separate Save from Save As: dedicated Save action for backend persistence, Save As for ZIP export (#1219, PR #1247)
+- ProxmoxVE LXC distribution infrastructure (PR #1218)
+
+### Fixed
+
+- Half-width device slot_position not threaded through pointer-based move events (#1244, PR #1246)
+- Half-width device slot_position not threaded through keyboard/context-menu move events (PR #1242)
+- Safari drag-and-drop broken due to missing text/plain fallback (#1200, PR #1243)
+- Settings menu gear icon broken by incorrect GroupHeading usage (#1203, PR #1241)
+- Share link encoding failure on large layouts (#953, #1195, PR #1242)
+- Duplicating half-width device linked state with original (#1195, PR #1242)
+- Half-width device context menu opening at wrong position (#1193, PR #1242)
+- Half-width second-device placement inconsistency in same RU (#1191, PR #1242)
+
+### Technical
+
+- Harden Playwright config for CI stability (#1223, PR #1232)
+- Pin GitHub Actions to commit SHAs in build-lxc.yml (PR #1256)
+- Consolidate E2E test helpers and migrate specs to gotoWithRack (#1225, PR #1249)
+- Bump Svelte from 5.50.1 to 5.51.2 (PR #1204, #1252)
+- Bump ESLint group, @vitest/eslint-plugin, typescript-eslint (PR #1250, #1251, #1257)
+- Bump actions group with 4 updates (PR #1253)
+- Bump simple-icons, qs, and production dependencies (PR #1206, #1217, #1220, #1221)
+
+## [0.8.0] - 2026-02-11
+
+### Added
+
+- Mobile bottom navigation bar with Framework7-inspired design (#641, PR #1055, #1062, #1063)
+- Slim toolbar mode for mobile viewports (PR #1054)
+- Mobile file actions sheet (PR #1059)
+- Rack indicator strip with navigation dots (PR #1056)
+- Mobile view sheet controls (#643, PR #1058)
+- Compact mobile toolbar quick actions (PR #1060)
+- Mobile device library trigger in bottom nav (PR #1061)
+- Mobile rack swipe navigation (PR #1076)
+- Touch long-press context menus (PR #1086)
+- Mobile floating undo/redo controls (#1046, PR #1098)
+- Virtual keyboard viewport adaptation (#1049, PR #1097)
+- Phase 1 NetBox homelab device import: 40 image-priority devices (#1109, PR #1134)
+- Phase 2 NetBox homelab device expansion: 45 image-backed devices (#1111, PR #1188)
+- E2E test infrastructure and wizard keyboard shortcuts (#903, PR #1128)
+- Layout store contract safety net tests (#910, PR #1083)
+- BottomSheet interaction test coverage (PR #1072)
+
+### Changed
+
+- Mobile warning modal updated with positive messaging (PR #1053)
+- Mobile export/share dialogs made responsive (#1047, PR #1123, #1126)
+- BottomSheet refactored to one-way open prop (PR #1073)
+- Tokenized shared dialog mobile content padding (#1162, PR #1165)
+
+### Fixed
+
+- Start Screen startup path stabilized (#1122, PR #1168)
+- Svelte a11y build warnings resolved (#1028, PR #1172)
+- App.svelte state_referenced_locally warning resolved (#1171, PR #1179)
+- Stale canvas touch listener lifecycle hardened (#1089, PR #1099)
+- Swipe pan rejection aligned with dominance ratio (#1090, PR #1093)
+- Swipe listener lifecycle and logging tightened (PR #1082)
+- Swipe gesture review follow-ups addressed (PR #1081)
+- Two-way binding to derived sheet state avoided (PR #1064)
+- Selection store sync, a11y improvements, and Safari iOS dark rack colours (PR #1057)
+- Persistence Start Screen integration into app launch flow (PR #1065)
+- Firefox logo SVG decode errors and persistence health handling hardened (PR #1092)
+- Keyboard viewport scroll excluded from select elements (#1103)
+- Zip export folder names sanitized (PR #1074)
+- Review & Clean Up action routed through real cleanup workflow (#1125, PR #1138)
+- Dev deploy env persistence and checkout permissions fixed (#1147, PR #1148, #1149)
+- Persistence health validation hardened to prevent false-positive API status (#1087, PR #1197)
+- API typecheck errors in security and storage modules resolved (PR #1186, #1192)
+
+### Security
+
+- API CORS hardened and write-route auth defaults tightened (#1124, PR #1135)
+- CORS explicitly configured for dev domain
+
+### Technical
+
+- Restored svelte-check/typecheck baseline (#1121, PR #1136)
+- NetBox homelab device curation spike delivered (#1096, PR #1118)
+- Authentication v1 architecture spike and ADR (#1100, PR #1167)
+- Security threat model research document added (#1069, PR #1070)
+- Nginx auth hardening section added to self-hosting guide (#1112, PR #1127)
+- Self-hosting docs: storage paths, persistence setup, and audit checklist updated (PR #1156, #1157, #1159, #1163)
+- Container/self-hosting runtime and CI guardrails tightened (#1155, PR #1161, #1169)
+- .env.example expanded for persistence and API security vars (#1153, PR #1159)
+- Deploy dev workflow and docker-compose updated
+- Hoisted mock resets in cleanup prompt spec (#1150, PR #1158)
+- Star history chart added to README (PR #1071, #1075)
+- Bumped dependencies: svelte 5.49.1→5.50.0, simple-icons, @types/node, eslint, Playwright, and others (PR #1139, #1140, #1141, #1142, #1143, #1146)
+- Updated copyright year and owner in LICENSE (PR #1166)
+- YAML viewer/editor spike recommendations (#573, PR #1173)
+- ESLint v10 peer dependency conflict reverted pending ecosystem support (#1198, PR #1199)
+
+## [0.7.9] - 2026-02-03
+
+### Security
+
+- Fix ReDoS vulnerability in @isaacs/brace-expansion (5.0.0 to 5.0.1, CVSS 9.2) (PR #1038)
+- Fix nginx security header inheritance bug: /assets/ location was silently dropping all security headers (#1037, PR #1038)
+- Add HSTS, Referrer-Policy, and Permissions-Policy headers to all responses (PR #1038)
+- Add 1MB request body size limit on layout PUT endpoints to prevent memory exhaustion (PR #1038)
+- Centralize security headers into shared nginx include snippet to prevent header drift (#1039, PR #1040)
+- Add startup warning when CORS_ORIGIN is unset in production (PR #1040)
+- Update jsPDF 4.0.0 to 4.1.0, resolving 4 CVEs: race condition, XMP injection, PDF injection, BMP DoS (PR #1033)
+
+### Technical
+
+- Bump GitHub Actions: claude-code-action, codeql-action, docker/login-action (PR #1034)
+- Bump development dependencies: Stryker, jsdom, happy-dom, svelte-check, @types/node, globals (PR #1035, #1032, #1031)
+- Remove deprecated X-XSS-Protection header (CSP replaces it) (PR #1038)
+
+## [0.7.8] - 2026-02-02
+
+### Fixed
+
+- Persistence API 404 errors on /layouts endpoints - routes now mount at root (#1007, PR #1008)
+- Stale localStorage overwriting newer server data during session storage race conditions (#1012, PR #1014)
+  - Thanks to @Mihai-B for reporting this issue!
+- Auto-save creating empty layout on every visit to root URL (#1003, PR #1013)
+- Nginx /api and /api/ edge case request handling (#1010, PR #1015)
+- CSP script hashes updated to match current build output (PR #1021)
+
+### Added
+
+- Compatibility aliases for /api/\* routes for direct API access (#1009, PR #1019)
+
+### Technical
+
+- Migrated Vitest config to v4 poolOptions format (#1017, PR #1018)
+- Addressed CodeRabbit feedback on session-storage tests (PR #1016)
+
+## [0.7.7] - 2026-01-31
+
+### Fixed
+
+- Persistence mode now actually persists data with proper YAML serialization (PR #1001)
+- Auto-save now works correctly with cloud status indicators
+- Start screen displays appropriately when persistence is enabled
+- Layout auto-loads on startup if a saved layout exists
+- Metadata and UUID handling for persisted layouts
+- Thanks to @timothystewart6 for the comprehensive persistence fix!
+
+### Technical
+
+- Production deployment now syncs docker-compose.yml from repo to prevent config drift
+- Added --remove-orphans flag to clean up stale containers during deployment
+- Fixed inch mark character escaping in changelog for GitHub Actions
+
+## [0.7.6] - 2026-01-31
+
+### Added
+
+- Rack width selector in custom device form with smart defaults based on active rack (#970)
+
+### Changed
+
+- Device palette now hides incompatible devices instead of graying them out (#996)
+- Empty brand categories are hidden when no compatible devices are available
+
+### Fixed
+
+- Custom devices cannot be created for 10-inch racks - now properly supports 10-inch, 19-inch, or both (#970)
+- Shorter racks stretch to match tallest rack height in multi-rack layout (#997)
+- structuredClone fails on Svelte 5 state proxy during auto-save (#998)
+- Double selection highlight on active rack (#999)
+
+## [0.7.5] - 2026-01-30
+
+### Added
+
+- Configurable nginx listen port via `RACKULA_LISTEN_PORT` environment variable (#980, PR #994)
+  - Enables advanced deployments where container and host ports need to match
+  - Backward compatible: existing deployments unchanged
+  - Thanks to @stavros-k for the feature request and initial implementation
+
+### Technical
+
+- Bump Svelte from 5.48.5 to 5.49.0 (PR #981)
+- Bump bits-ui from 2.15.4 to 2.15.5 (PR #982)
+- Bump @eslint/compat from 2.0.1 to 2.0.2 (PR #985)
+- Bump development dependencies (PR #992)
+
+## [0.7.4] - 2026-01-30
+
+This release introduces the `:persist` image tag, enabling persistence for self-hosted installs via the rackula-api server-side container. See the [Self-Hosting Guide](docs/deployment/SELF-HOSTING.md) for details.
+
+### Added
+
+- Cisco brand pack with core homelab/enterprise devices (#987, PR #988)
+- Custom brand icons for AC Infinity, CyberPower, DeskPi, and Netgate
+- 8 new brand icons from simple-icons: Fortinet, Netgear, Palo Alto, Cisco, QNAP, Lenovo, Blackmagic Design, Apple (#990, PR #991)
+- CI workflow to publish :persist Docker image tag (#973, PR #974)
+
+### Changed
+
+- Unified API port configuration under RACKULA_API_PORT environment variable (#960, #962)
+- Refactored self-hosting documentation for current deployment methodology (#944, PR #976)
+- Docker compose now references :persist image tag (PR #975)
+
+### Fixed
+
+- Duplicate slug detection and airflow normalization for brand pack devices (PR #989)
+- nginx envsubst escaping for read-only container filesystems (#968)
+- Docker healthcheck now uses PORT environment variable (#961, PR #955)
+
+### Technical
+
+- Dependencies: svelte 5.48.5, simple-icons 16.6.1, happy-dom 20.4.0, @types/node 25.1.0, globals 17.2.0
+- GitHub Actions updates (PR #959)
+
+## [0.7.3] - 2026-01-24
+
+### Fixed
+
+- Splash screen blocking localStorage persistence on startup (#948)
+- Canvas not filling available space due to bits-ui wrapper regression (#897, #931) - thanks @Aries223 for reporting
+- Rack focus positioning not accounting for drawer width (#950)
+- Rack bottoms misaligned in multi-rack layout focus calculations (#949)
+
+### Technical
+
+- Bump globals from 17.0.0 to 17.1.0 (#932)
+
+## [0.7.2] - 2026-01-24
+
+### Fixed
+
+- Canvas not filling available space with small racks (#931, #897)
+
+## [0.7.1] - 2026-01-24
+
+### Fixed
+
+- Splash screen no longer shows "Persistence API unavailable" warning to SaaS users (#942, #943)
+
+## [0.7.0] - 2026-01-24
+
+Major release featuring multi-rack support, persistent storage API, and improved data format.
+
+### Added
+
+- Multi-rack support: Create and manage multiple racks in a single layout (#938)
+- Persistent storage API: Self-hosted deployments can now save layouts server-side (#858, #864)
+- Runtime API detection: App automatically detects API availability without rebuild (#936, #941)
+- UUID-based layout storage with folder-per-layout structure (#916, #917, #926, #927)
+- Folder-structure zip export for browser-only users (#919, #928)
+- Import support for new folder-structure zip format (#920, #930)
+- Metadata section in YAML schema (id, name, schema_version, description) (#915, #922)
+- Version info displayed on splash screen (#905, #906)
+- Rackula logo on StartScreen (#902)
+- bits-ui Checkbox component (#828, #881)
+- bits-ui Switch component for toggle switches (#880, #884)
+- E2E tests for device metadata persistence (#887, #889)
+- E2E tests for rack Focus context menu (#908, #912)
+- Carlton E2E regression test for decimal positions (#883, #886)
+
+### Changed
+
+- Layout format migration: automatically converts old formats on first save (#918, #929)
+- About dialog: removed redundant header and X close button (#900, #904)
+
+### Fixed
+
+- localStorage migration for legacy rack format when upgrading from v0.6.x (#935, #940)
+- Focus and fit-all calculations for rack centering (#908, #913, #914)
+- fitAll dimensions for single-view racks (#911)
+- Autosave loading prevented after "New Layout" click (#899, #909)
+- RackList props restored after persistence refactor (#895, #896)
+- Rear view toggle works for bayed rack groups (#874, #888)
+- Decimal U positions accepted in layout files (#879, #885)
+- Half-width blocked slot indicators positioning (#875, #877)
+- Bayed racks exported as connected groups (#873)
+
+### Technical
+
+- Runtime API detection replaces build-time VITE_PERSIST_ENABLED flag (#936, #941)
+- API sidecar support for dev environment (#937)
+- CodeRabbit pre-push hook integration
+
+## [0.6.16] - 2026-01-08
+
+Fixed some regressions in device placement logic after refactoring.
+
+Also learning a bit about how vitest works (or doesn't) with >3k tests.
+
+Also added a little widget for displaying app build info for development purposes.
+
+### Added
+
+- feature: added/refactored the About menu to show relevant info about the app version, build time (#441)
+
+### Fixed
+
+- bug: Changing device face to 'both' bypasses collision detection (#450)
+- bug: Full-depth devices with overridden face still block opposite face placements (#444)
+
+### Technical
+
+- bug: Test suite crashes with JavaScript heap memory limit / IPC channel error (#446)
+
+### Research
+
+- Ongoing work on multi-rack support and multi-bay racks.
+
+## [0.6.15] - 2026-01-05
+
+### Fixed
+
+- Safari coordinate conversion bug causing drop target offset when zoomed (replaced getScreenCTM with getBoundingClientRect) (#424)
+- Safari text selection during device drag (#424)
+- Safari logo disappearance in party mode (#423)
+
+### Technical
+
+- Audit and migrate remaining foreignObject elements to SVG-native implementations (#420, PR #422)
+
+## [0.6.14] - 2026-01-04
+
+## Added
+
+#251: feat: port tooltips on hover #146: Support half-width devices in full width rack #403: feat: Add IP Address field to Device Edit Panel
+
+### Fixed
+
+#415: Docker container never marked as healthy - thanks to @HellsCrimson for reporting! #411: Safari 18.x: Device positioning broken - grab handles stacked at top of rack - thanks to @brandonb927 for reporting #393: drag and dropping not working on Safari/Mac
+
+### Technical
+
+#399: chore: Address CodeRabbit feedback from #398 (Safari pointer events fix) #400: fix: Refactor PortIndicators to use SVG-native pointer events (Safari compatibility) #406: chore: consolidate brand pack tests into single parameterized file #407: chore: remove redundant schema validation tests #408: chore: audit and reduce high-volume test files #409: chore: add high-value tests for under-tested areas #418: chore: remove unused face option from createTestDevice helper in collision tests
+
+## [0.6.13] - 2026-01-03
+
+### Fixed
+
+- Safari device selection and drag-and-drop not working (WebKit Bug #230304 workaround) - thanks @Daishi1938 for reporting! (#397, #393, #394, PR #398)
+
+### Technical
+
+- Cable path rendering algorithm research spike (#262, PR #395)
+
+## [0.6.12] - 2026-01-03
+
+### Added
+
+- PlacedPort schema and port instantiation for connection infrastructure (#363, PR #389)
+- MVP Connection model with port-based references (#365, PR #392)
+
+### Fixed
+
+- Docker images now build for both amd64 and arm64 architectures (#390, PR #391)
+
+## [0.6.11] - 2026-01-02
+
+### Fixed
+
+- Face override not working on full-depth devices (#383, PR #385)
+
+## [0.6.10] - 2026-01-02
+
+### Added
+
+- Network interface port indicators on devices with color-coded types (#249, PR #378; #250, PR #382)
+- Fuzzy search with Fuse.js in device library (#310, PR #373)
+- Cable data model and schema (#261, PR #355)
+- Apple brand pack: Xserve, Xserve RAID (#340, PR #353)
+- AC Infinity brand pack: Cloudplate T1, T2, T7 cooling fans (#337, PR #343)
+- 27 Ubiquiti device images from vastoholic/draw-io (#339, PR #350)
+
+### Changed
+
+- Self-hosted Space Grotesk font for logo wordmark (#377, PR #379)
+
+### Fixed
+
+- Banana orientation and icon (#348, PR #349)
+- CodeRabbit feedback on PortIndicators and fuzzy search (PR #374, PR #381)
+
+### Technical
+
+- Collision toast notification test suite (#307, PR #351)
+- Extracted getDeviceDisplayName helper function (#348, PR #354)
+
+## [0.6.9] - 2025-12-31
+
+### Added
+
+- 21-inch rack support for OCP Open Rack width (#149)
+- NetBox YAML import for device types (#259)
+- Resizable device library sidebar with keyboard shortcuts (#318)
+- Multi-field device search with relevance scoring (#308)
+- Rack-side annotations column (#173)
+- Mobile long-press editing for devices (#230)
+- Paraglide JS 2.0 internationalization infrastructure (#182)
+- Build time indicator in dev environment (#328, #336)
+- MikroTik RB5009 device (#280)
+- Banana for scale easter egg (#313)
+
+### Fixed
+
+- Device library panel content after #259 regression
+- iOS Safari long press for device edit menu (#232)
+- Rack + annotations centering relative to name heading (#304)
+- Banana positioning and rotation (#317)
+
+### Technical
+
+- Research spikes: isometric rendering (#321), device search (#281), NetBox DnD patterns (#200)
+- Performance baseline for port visualization (#255)
+
+## [0.6.8] - 2025-12-30
+
+### Added
+
+- Device depth visibility badges and Add Device toggle (#240, #241)
+- DeskPi brand pack: 8 devices for 10-inch rack accessories (#226)
+- Tier 1 analytics for core feature adoption metrics (#223)
+- DRackula prefix for development environment (#215)
+
+### Changed
+
+- Restored Dracula purple logo with white brand text (#233)
+
+### Fixed
+
+- Consolidated duplicate createRack function exports (#224)
+
+### Technical
+
+- iOS Safari E2E tests via BrowserStack (#228)
+- Android Chrome E2E tests (#229)
+- Network interface visualization spike research (#237)
+
+## [0.6.7] - 2025-12-29
+
+### Added
+
+- Mobile tap-to-place editing experience (PR #174)
+- Toggle to disable rear view on canvas (#207, PR #222)
+- White logo with rainbow gradient on hover (#216, PR #221)
+
+### Fixed
+
+- Canvas.svelte a11y warnings with ARIA role (#208, PR #213)
+- U numbering direction in export (#217, PR #220)
+
+## [0.6.6] - 2025-12-29
+
+### Added
+
+- Invert U numbering toggle in EditPanel (#204, PR #210)
+
+### Fixed
+
+- Zod jitless mode to avoid CSP violations (#211, PR #212)
+
+## [0.6.5] - 2025-12-29
+
+### Added
+
+- UI controls for 0.5U device positioning (#145, PR #179)
+- Auto-resize device labels for longer text (PR #178)
+- create-issue Claude Code skill (#194, PR #195)
+
+### Changed
+
+- Extracted device movement logic into shared utility (PR #180)
+- Docker compose configuration update (PR #170)
+
+### Fixed
+
+- Export respects colour_override on placed devices (#171, PR #175)
+- localStorage mock and test timeout (#193, PR #197)
+- Removed invalid project-status-sync workflow (#201, PR #203)
+
+### Technical
+
+- Beszel monitoring backend spike (#199, PR #202)
+
+## [0.6.4] - 2025-12-28
+
+### Added
+
+- Face override on all device types (#161)
+- Warning modal for mobile users (#165)
+- Delete custom device types from library (#162, PR #164)
+
+### Fixed
+
+- Brand pink for mobile warning modal button (#163, PR #169)
+
+### Technical
+
+- Regression tests for blank panel depth detection (PR #160)
+- Regression tests for custom multi-U device placement (#166, PR #168)
+
+## [0.6.3] - 2025-12-28
+
+### Added
+
+- Widow's peak logo with Space Grotesk font and heartbeat animation (PR #148)
+
+### Fixed
+
+- Toolbar logo border and analytics subdomain (PR #147)
+
+## [0.6.2] - 2025-12-27
+
+### Changed
+
+- Minor fixes and improvements
+
+## [0.6.1] - 2025-12-27
+
+### Changed
+
+- Rebranded to Rackula name
+
+## [0.5.9] - 2025-12-20
+
+### Added
+
+- Device palette search with keyboard navigation and highlighting (#13)
+- Notes field for racks in edit panel
+- localStorage auto-save for session persistence (#85)
+- Mobile view UI with touch gestures and viewport detection (#85)
+- Shareable layout links via URL (#89)
+- NetBox device import automation (#106)
+- Ubiquiti brand pack device images (#6)
+- Visual environment indicator in titlebar (#69)
+- GitHub Issue Types and size label automation (#81)
+
+### Changed
+
+- Redesigned device edit panel UX (#12)
+- Reduced visual noise in EditPanel (#11)
+- Standardized mobile breakpoint to 1024px (#85)
+- Migrated test environment from jsdom to happy-dom (#79)
+- Improved mobile toolbar UX with hamburger menu (#85)
+- Starter library now loads as runtime constant (#100)
+
+### Fixed
+
+- PlacedDevice UUID generation now uses generateId() (#114)
+- App test stability for CI
+- Share link crypto.randomUUID error
+- File picker dialog race conditions (#45)
+- Orphaned image cleanup for memory leaks (#46)
+- Device auto-import reactivity (#43)
+- Export preview error messages (#44)
+- Rectangular mounting holes on rack rails (#18)
+- Device images extend past rack rails for realism (#9)
+
+### Security
+
+- XSS defense measures and documentation
+- Explicit permissions for GitHub workflows (CWE-275)
+
+### Technical
+
+- Comprehensive test coverage expansion
+- Docker caching and CI workflow optimization (#77)
+- Pre-commit hooks optimization (#76, #78)
+- Documentation reorganization with ARCHITECTURE.md (#26)
+
+## [0.2.1] - 2025-12-01
+
+### Added
+
+- WCAG AA accessibility compliance with ARIA audit
+- Color contrast verification utilities
+- Animation keyframes system (device-settle, drawer, toast, dialog, shake)
+- Reduced motion support (CSS + JavaScript utilities)
+- 5th U number highlighting for easier rack unit reading
+- Tabular figures and monospace font for U numbers
+- Comprehensive accessibility test suite
+
+### Changed
+
+- Design tokens system consolidated in `src/lib/styles/tokens.css`
+- Edit panel visual hierarchy improved
+- Form inputs consistent styling
+
+### Technical
+
+- Test suite expanded to 1043 tests
+- Added accessibility checklist documentation
+
+## [0.2.0] - 2025-11-30
+
+### Added
+
+- Front/rear rack view toggle with device face filtering
+- Device face assignment (front, rear, or both)
+- Fit All zoom button with F keyboard shortcut
+- Rack duplication with Ctrl/Cmd+D shortcut
+- Device library import from JSON files
+- Layout migration from v0.1 to v0.2
+
+### Changed
+
+- Device Library toggle button replaces branding in toolbar
+- Rack titles now positioned above racks (not below)
+- Device icons vertically centered in rack slots
+- Help panel shows only GitHub link
+
+### Fixed
+
+- Coordinate calculations now use getScreenCTM() for better zoom/pan handling
+- Drag-and-drop works correctly at all zoom levels and pan positions
+
+### Technical
+
+- Integrated panzoom library for smooth canvas zoom/pan
+- Added comprehensive test coverage (793 tests)
+
+## [0.1.1] - 2025-12-01
+
+### Changed
+
+- Rescoped to single-rack editing for v0.1 stability
+- Multi-rack support deferred to v0.3
+- Removed rack reordering UI (drag handles)
+- Simplified canvas layout for single rack (centered)
+
+### Added
+
+- Save-first confirmation dialog when replacing rack
+- Warning toast when loading multi-rack files
+- E2E tests for single-rack behavior
+
+### Removed
+
+- Multi-rack canvas display (deferred to v0.3)
+- Cross-rack device moves (deferred to v0.3)
+- Rack reordering controls (deferred to v0.3)
+
+## [0.1.0] - 2025-11-28
+
+### Added
+
+- Initial release of Rackula
+- Visual rack editor with SVG rendering
+- Drag-and-drop device placement from palette
+- Device movement within and between racks
+- Collision detection and prevention
+- Starter device library with 23 common devices
+- Custom device creation with category colors
+- Edit panel for rack and device properties
+- Dark and light theme support
+- Keyboard shortcuts for all actions
+- Save/load layouts as JSON files
+- Export to PNG, JPEG, SVG, and PDF
+- Session auto-save to browser storage
+- Help panel with keyboard shortcuts reference
+- Docker deployment configuration
+- Comprehensive test suite (unit, component, E2E)

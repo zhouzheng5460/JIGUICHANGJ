@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Safari CTM Transform Bug Repro - Issue #411</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #1e1e2e;
+        color: #cdd6f4;
+      }
+      h1 {
+        color: #f5c2e7;
+        margin-bottom: 10px;
+      }
+      .controls {
+        margin-bottom: 20px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      button {
+        padding: 8px 16px;
+        background: #45475a;
+        color: #cdd6f4;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #585b70;
+      }
+      button.active {
+        background: #89b4fa;
+        color: #1e1e2e;
+      }
+      .container {
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+      .test-area {
+        flex: 1;
+        min-width: 300px;
+      }
+      .canvas-wrapper {
+        background: #313244;
+        border-radius: 8px;
+        padding: 20px;
+        overflow: hidden;
+      }
+      /* This simulates panzoom's CSS transform */
+      .panzoom-container {
+        transform-origin: 0 0;
+        /* Will be modified by controls */
+      }
+      .rack-svg {
+        background: #45475a;
+        border-radius: 4px;
+      }
+      .rack-interior {
+        fill: #1e1e2e;
+      }
+      .rack-rail {
+        fill: #585b70;
+      }
+      .device-rect {
+        cursor: grab;
+      }
+      .device-rect:active {
+        cursor: grabbing;
+      }
+      .device-label {
+        fill: #1e1e2e;
+        font-size: 12px;
+        font-weight: bold;
+        pointer-events: none;
+      }
+      .category-icon {
+        fill: #1e1e2e;
+        font-size: 10px;
+      }
+      .log-area {
+        flex: 1;
+        min-width: 300px;
+        max-height: 600px;
+        overflow-y: auto;
+      }
+      #log {
+        background: #11111b;
+        border-radius: 8px;
+        padding: 16px;
+        font-family: "SF Mono", Monaco, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        line-height: 1.5;
+      }
+      .log-entry {
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #313244;
+      }
+      .log-header {
+        color: #f5c2e7;
+        font-weight: bold;
+      }
+      .log-success {
+        color: #a6e3a1;
+      }
+      .log-warning {
+        color: #f9e2af;
+      }
+      .log-error {
+        color: #f38ba8;
+      }
+      .info-box {
+        background: #313244;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 20px;
+      }
+      .info-box h3 {
+        margin-top: 0;
+        color: #89b4fa;
+      }
+      .info-box code {
+        background: #45475a;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Safari CTM Transform Bug Repro</h1>
+    <p>Issue #411 - Testing getScreenCTM() behavior with nested transforms</p>
+
+    <div class="info-box">
+      <h3>Test Instructions</h3>
+      <ol>
+        <li>
+          Click on the colored device boxes - the click position should match
+          the logged SVG coordinates
+        </li>
+        <li>
+          Drag a device - movement should be 1:1 with cursor (no acceleration)
+        </li>
+        <li>Toggle CSS transform (panzoom simulation) and repeat tests</li>
+        <li>Compare Chrome vs Safari results in the log</li>
+      </ol>
+      <p><strong>Browser:</strong> <code id="browser-info"></code></p>
+      <p><strong>DPR:</strong> <code id="dpr-info"></code></p>
+    </div>
+
+    <div class="controls">
+      <button id="btn-no-transform" class="active">No CSS Transform</button>
+      <button id="btn-scale-50">CSS scale(0.5)</button>
+      <button id="btn-scale-150">CSS scale(1.5)</button>
+      <button id="btn-translate">CSS translate(50, 50)</button>
+      <button id="btn-combo">CSS scale(0.8) + translate</button>
+      <button id="btn-clear-log">Clear Log</button>
+    </div>
+
+    <div class="container">
+      <div class="test-area">
+        <h3>Test SVG (Rackula-like structure)</h3>
+        <div class="canvas-wrapper">
+          <div id="panzoom-container" class="panzoom-container">
+            <!--
+            SVG structure matches Rackula:
+            - viewBox with negative Y offset (NAME_Y_OFFSET = 4)
+            - RACK_PADDING = 18, RAIL_WIDTH = 17
+            - Nested <g> for device group with transform
+            - RackDevice <g> with its own transform
+          -->
+            <svg
+              id="rack-svg"
+              class="rack-svg"
+              width="220"
+              height="328"
+              viewBox="0 -4 220 328"
+              role="img"
+            >
+              <!-- Rack interior (simulating rack background) -->
+              <rect
+                class="rack-interior"
+                x="17"
+                y="35"
+                width="186"
+                height="264"
+              />
+
+              <!-- Top rail -->
+              <rect class="rack-rail" x="0" y="18" width="220" height="17" />
+
+              <!-- Bottom rail -->
+              <rect class="rack-rail" x="0" y="299" width="220" height="17" />
+
+              <!-- Left rail -->
+              <rect class="rack-rail" x="0" y="35" width="17" height="264" />
+
+              <!-- Right rail -->
+              <rect class="rack-rail" x="203" y="35" width="17" height="264" />
+
+              <!-- Device group: translate(0, RACK_PADDING + RAIL_WIDTH) = translate(0, 35) -->
+              <g id="device-group" transform="translate(0, 35)">
+                <!-- Device 1 at U10: yPosition = (12 - 10 - 2 + 1) * 22 = 22 -->
+                <!-- RackDevice transform: translate(RAIL_WIDTH, yPosition) = translate(17, 22) -->
+                <g
+                  id="device-1"
+                  class="rack-device"
+                  transform="translate(17, 22)"
+                  data-u-position="10"
+                >
+                  <rect
+                    class="device-rect"
+                    x="0"
+                    y="0"
+                    width="186"
+                    height="44"
+                    fill="#89b4fa"
+                    rx="2"
+                  />
+                  <!-- Category icon - should appear at device position, not (0,0) -->
+                  <text class="category-icon" x="8" y="26">SRV</text>
+                  <!-- Device label -->
+                  <text class="device-label" x="93" y="26" text-anchor="middle">
+                    Device U10-11
+                  </text>
+                </g>
+
+                <!-- Device 2 at U5: yPosition = (12 - 5 - 1 + 1) * 22 = 154 -->
+                <g
+                  id="device-2"
+                  class="rack-device"
+                  transform="translate(17, 154)"
+                  data-u-position="5"
+                >
+                  <rect
+                    class="device-rect"
+                    x="0"
+                    y="0"
+                    width="186"
+                    height="22"
+                    fill="#a6e3a1"
+                    rx="2"
+                  />
+                  <text class="category-icon" x="8" y="15">NET</text>
+                  <text class="device-label" x="93" y="15" text-anchor="middle">
+                    Device U5
+                  </text>
+                </g>
+
+                <!-- Device 3 at U1: yPosition = (12 - 1 - 1 + 1) * 22 = 242 -->
+                <g
+                  id="device-3"
+                  class="rack-device"
+                  transform="translate(17, 242)"
+                  data-u-position="1"
+                >
+                  <rect
+                    class="device-rect"
+                    x="0"
+                    y="0"
+                    width="186"
+                    height="22"
+                    fill="#f5c2e7"
+                    rx="2"
+                  />
+                  <text class="category-icon" x="8" y="15">PWR</text>
+                  <text class="device-label" x="93" y="15" text-anchor="middle">
+                    Device U1
+                  </text>
+                </g>
+              </g>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="log-area">
+        <h3>Event Log</h3>
+        <div id="log"></div>
+      </div>
+    </div>
+
+    <script>
+      const log = document.getElementById("log");
+      const svg = document.getElementById("rack-svg");
+      const panzoomContainer = document.getElementById("panzoom-container");
+      const deviceGroup = document.getElementById("device-group");
+
+      // Constants matching Rackula
+      const RACK_PADDING = 18;
+      const RAIL_WIDTH = 17;
+      const U_HEIGHT = 22;
+      const RACK_HEIGHT = 12; // 12U rack
+
+      // Display browser info
+      document.getElementById("browser-info").textContent = navigator.userAgent;
+      document.getElementById("dpr-info").textContent = window.devicePixelRatio;
+
+      // Logging helper
+      function addLog(header, content, type = "") {
+        const entry = document.createElement("div");
+        entry.className = "log-entry";
+        entry.innerHTML = `<div class="log-header">${header}</div><div class="${type}">${content}</div>`;
+        log.insertBefore(entry, log.firstChild);
+      }
+
+      // Clear log
+      document.getElementById("btn-clear-log").addEventListener("click", () => {
+        log.innerHTML = "";
+        addLog("Log cleared", new Date().toLocaleTimeString());
+      });
+
+      // Transform controls
+      const transformButtons = {
+        "btn-no-transform": "",
+        "btn-scale-50": "scale(0.5)",
+        "btn-scale-150": "scale(1.5)",
+        "btn-translate": "translate(50px, 50px)",
+        "btn-combo": "scale(0.8) translate(30px, 30px)",
+      };
+
+      Object.entries(transformButtons).forEach(([id, transform]) => {
+        document.getElementById(id).addEventListener("click", () => {
+          // Update active button
+          document
+            .querySelectorAll(".controls button")
+            .forEach((b) => b.classList.remove("active"));
+          document.getElementById(id).classList.add("active");
+
+          // Apply transform
+          panzoomContainer.style.transform = transform;
+          addLog("Transform changed", transform || "(none)");
+
+          // Log new CTM
+          logCTM("After transform change");
+        });
+      });
+
+      // Log CTM details
+      function logCTM(context) {
+        const ctm = svg.getScreenCTM();
+        if (!ctm) {
+          addLog(`CTM (${context})`, "CTM is null!", "log-error");
+          return;
+        }
+
+        const content = `
+a (scaleX): ${ctm.a.toFixed(4)}
+b (skewY):  ${ctm.b.toFixed(4)}
+c (skewX):  ${ctm.c.toFixed(4)}
+d (scaleY): ${ctm.d.toFixed(4)}
+e (translateX): ${ctm.e.toFixed(2)}
+f (translateY): ${ctm.f.toFixed(2)}`;
+
+        addLog(`CTM (${context})`, content);
+      }
+
+      // screenToSVG - matches Rackula's implementation
+      function screenToSVG(clientX, clientY) {
+        const pt = svg.createSVGPoint();
+        pt.x = clientX;
+        pt.y = clientY;
+
+        const ctm = svg.getScreenCTM();
+        if (!ctm) {
+          return { x: clientX, y: clientY, error: "No CTM" };
+        }
+
+        const transformed = pt.matrixTransform(ctm.inverse());
+        return { x: transformed.x, y: transformed.y };
+      }
+
+      // Alternative: getBoundingClientRect approach
+      function screenToSVG_BBox(clientX, clientY) {
+        const rect = svg.getBoundingClientRect();
+        const viewBox = svg.viewBox.baseVal;
+
+        // Calculate scale
+        const scaleX = viewBox.width / rect.width;
+        const scaleY = viewBox.height / rect.height;
+
+        // Transform coordinates
+        const x = (clientX - rect.left) * scaleX + viewBox.x;
+        const y = (clientY - rect.top) * scaleY + viewBox.y;
+
+        return { x, y };
+      }
+
+      // Click handler on SVG
+      svg.addEventListener("click", (event) => {
+        const { clientX, clientY } = event;
+
+        // Method 1: CTM-based (Rackula's current approach)
+        const ctmCoords = screenToSVG(clientX, clientY);
+
+        // Method 2: BBox-based (potential workaround)
+        const bboxCoords = screenToSVG_BBox(clientX, clientY);
+
+        // Calculate expected U position using CTM coords
+        const mouseY = ctmCoords.y - RACK_PADDING;
+        const uFromTop = Math.floor(mouseY / U_HEIGHT);
+        const uPosition = RACK_HEIGHT - uFromTop;
+
+        // Calculate using BBox coords
+        const mouseY_bbox = bboxCoords.y - RACK_PADDING;
+        const uFromTop_bbox = Math.floor(mouseY_bbox / U_HEIGHT);
+        const uPosition_bbox = RACK_HEIGHT - uFromTop_bbox;
+
+        const content = `
+Client: (${clientX}, ${clientY})
+CTM SVG coords: (${ctmCoords.x.toFixed(1)}, ${ctmCoords.y.toFixed(1)}) → U${uPosition}
+BBox SVG coords: (${bboxCoords.x.toFixed(1)}, ${bboxCoords.y.toFixed(1)}) → U${uPosition_bbox}
+Difference: (${(ctmCoords.x - bboxCoords.x).toFixed(1)}, ${(ctmCoords.y - bboxCoords.y).toFixed(1)})`;
+
+        const match = Math.abs(ctmCoords.y - bboxCoords.y) < 2;
+        addLog("Click Event", content, match ? "log-success" : "log-error");
+      });
+
+      // Drag tracking for velocity test
+      let isDragging = false;
+      let dragStartPos = null;
+      let dragStartCTM = null;
+      let lastDragLog = 0;
+
+      svg.addEventListener("pointerdown", (event) => {
+        if (event.target.classList.contains("device-rect")) {
+          isDragging = true;
+          dragStartPos = { x: event.clientX, y: event.clientY };
+          dragStartCTM = svg.getScreenCTM();
+          event.target.setPointerCapture(event.pointerId);
+          addLog("Drag Start", `Client: (${event.clientX}, ${event.clientY})`);
+          logCTM("Drag start");
+        }
+      });
+
+      svg.addEventListener("pointermove", (event) => {
+        if (!isDragging) return;
+
+        // Throttle logging
+        const now = Date.now();
+        if (now - lastDragLog < 200) return;
+        lastDragLog = now;
+
+        const { clientX, clientY } = event;
+        const dx = clientX - dragStartPos.x;
+        const dy = clientY - dragStartPos.y;
+
+        // Convert to SVG coords
+        const svgCoords = screenToSVG(clientX, clientY);
+        const svgStart = screenToSVG(dragStartPos.x, dragStartPos.y);
+        const svgDx = svgCoords.x - svgStart.x;
+        const svgDy = svgCoords.y - svgStart.y;
+
+        // Check CTM consistency
+        const currentCTM = svg.getScreenCTM();
+        const ctmChanged =
+          dragStartCTM &&
+          currentCTM &&
+          (Math.abs(dragStartCTM.a - currentCTM.a) > 0.001 ||
+            Math.abs(dragStartCTM.d - currentCTM.d) > 0.001 ||
+            Math.abs(dragStartCTM.e - currentCTM.e) > 0.5 ||
+            Math.abs(dragStartCTM.f - currentCTM.f) > 0.5);
+
+        // Calculate velocity ratio (should be ~1.0 for 1:1 tracking)
+        const velocityRatioX = dx !== 0 ? svgDx / dx : 0;
+        const velocityRatioY = dy !== 0 ? svgDy / dy : 0;
+
+        const content = `
+Screen delta: (${dx}, ${dy})
+SVG delta: (${svgDx.toFixed(1)}, ${svgDy.toFixed(1)})
+Velocity ratio: (${velocityRatioX.toFixed(3)}, ${velocityRatioY.toFixed(3)})
+CTM changed: ${ctmChanged ? "YES!" : "No"}`;
+
+        const isNormal = Math.abs(velocityRatioY - 1.0) < 0.1 && !ctmChanged;
+        addLog("Drag Move", content, isNormal ? "log-success" : "log-warning");
+      });
+
+      svg.addEventListener("pointerup", () => {
+        if (isDragging) {
+          isDragging = false;
+          addLog("Drag End", "Released");
+          logCTM("Drag end");
+        }
+      });
+
+      // Initial CTM log
+      addLog(
+        "Initial Load",
+        `DPR: ${window.devicePixelRatio}, Browser: ${/Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent) ? "Safari" : "Chrome/Other"}`,
+      );
+      logCTM("Initial");
+    </script>
+  </body>
+</html>

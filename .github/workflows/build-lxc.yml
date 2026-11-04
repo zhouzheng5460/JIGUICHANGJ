@@ -1,0 +1,204 @@
+name: Build LXC Tarball
+
+# Builds the self-contained LXC tarball (frontend + API + config) for a published
+# release and uploads it, with a SHA256 checksum, to that release.
+#
+# workflow_call: Called by release.yml after a release is created. version is required
+#   and must match CalVer.
+# workflow_dispatch: Manually re-upload the tarball for an existing release. version is
+#   required and must match CalVer.
+#
+# Both triggers are write-access-gated and only ever check out the validated CalVer tag,
+# so there is no untrusted checkout here. For building a test artifact from an arbitrary
+# branch/tag/SHA during development, use build-lxc-dev.yml (see docs/deployment/LXC-TESTING.md).
+#
+# Split into two jobs by privilege:
+#   build   - contents: read. Checks out the version tag and runs dependency code
+#             (npm ci, bun install) with no write-capable token.
+#   publish - contents: write. Downloads the build artifact and uploads it to the
+#             release. Runs no repo/dependency code.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version tag (e.g. v26.6.0)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g. v26.6.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Serialise per version so a manual dispatch and the release-triggered call cannot race
+# on the same release asset (gh release upload --clobber).
+concurrency:
+  group: build-lxc-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build LXC tarball
+    runs-on: ubuntu-latest
+    steps:
+      # Validate before checkout so only a strict CalVer tag can be the checkout ref.
+      - name: Validate version format
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # Reject newline/CR first: grep matches line-by-line, so a multiline value
+          # whose first line is valid CalVer would otherwise pass and then flow into the
+          # checkout ref, tarball filenames, and gh release calls.
+          case "$VERSION" in
+            *$'\n'*|*$'\r'*)
+              echo "ERROR: Version must not contain newline or CR characters"
+              exit 1
+              ;;
+          esac
+          if ! echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: Version '$VERSION' does not match expected format vYY.M.MICRO (e.g. v26.6.0)"
+            exit 1
+          fi
+          echo "Version: $VERSION"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.version }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1"
+
+      - name: Build frontend
+        env:
+          VITE_ENV: production
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install API production dependencies
+        run: |
+          cd api
+          # The tarball is built on x86 but installs on any LXC arch (incl. arm64).
+          # @node-rs/argon2 (the only native dep) ships per-platform binaries as
+          # os/cpu-gated optional deps, so a normal host install pulls x64 only.
+          # --cpu='*' --os=linux materialises every linux variant (x64 + arm64, gnu and
+          # musl) in one production install, so the bundled node_modules runs on both
+          # architectures. --production keeps devDependencies out of the tarball. The
+          # runtime loader selects the binary by file presence, not the os/cpu manifest.
+          # better-auth declares vitest as an optional peer, and Bun installs optional
+          # peers present in the lockfile, so --production alone still ships the
+          # dev-only vitest/vite tree. --omit=peer drops it (#3279).
+          bun install --frozen-lockfile --production --omit=peer --cpu='*' --os=linux
+
+          # Fail the build if either native binary is missing.
+          test -f node_modules/@node-rs/argon2-linux-x64-gnu/argon2.linux-x64-gnu.node
+          test -f node_modules/@node-rs/argon2-linux-arm64-gnu/argon2.linux-arm64-gnu.node
+
+      - name: Assemble tarball
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          TARBALL_DIR="rackula-lxc-${VERSION}"
+
+          mkdir -p "${TARBALL_DIR}/frontend"
+          mkdir -p "${TARBALL_DIR}/api"
+          mkdir -p "${TARBALL_DIR}/config"
+
+          # Frontend build output
+          cp -r dist/* "${TARBALL_DIR}/frontend/"
+
+          # API source + production deps (Bun runs TS natively)
+          cp -r api/src "${TARBALL_DIR}/api/src"
+          cp -r api/node_modules "${TARBALL_DIR}/api/node_modules"
+          cp api/package.json "${TARBALL_DIR}/api/package.json"
+          cp api/tsconfig.json "${TARBALL_DIR}/api/tsconfig.json"
+
+          # LXC-specific config files
+          cp deploy/lxc/nginx.conf "${TARBALL_DIR}/config/"
+          cp deploy/lxc/rackula-api.service "${TARBALL_DIR}/config/"
+          cp deploy/lxc/security-headers.conf "${TARBALL_DIR}/config/"
+          cp deploy/lxc/nginx.service.d-override.conf "${TARBALL_DIR}/config/"
+
+          # Verify expected directories exist in the tarball
+          for dir in frontend api config; do
+            if [ ! -d "${TARBALL_DIR}/${dir}" ] || [ -z "$(ls -A "${TARBALL_DIR}/${dir}")" ]; then
+              echo "ERROR: Tarball directory '${dir}' is missing or empty"
+              exit 1
+            fi
+          done
+
+          tar czf "rackula-lxc-${VERSION}.tar.gz" "${TARBALL_DIR}"
+
+          # Generate SHA256 checksum for integrity verification
+          sha256sum "rackula-lxc-${VERSION}.tar.gz" > "rackula-lxc-${VERSION}.tar.gz.sha256"
+
+          rm -rf "${TARBALL_DIR}"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lxc-tarball
+          path: |
+            rackula-lxc-${{ inputs.version }}.tar.gz
+            rackula-lxc-${{ inputs.version }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish to release
+    needs: build
+    runs-on: ubuntu-latest
+    # contents: write is required only to upload the tarball and its checksum as
+    # assets on the published release (gh release upload).
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download tarball artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lxc-tarball
+
+      - name: Publish tarball to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          TARBALL="rackula-lxc-${VERSION}.tar.gz"
+
+          # Guard against accidental corruption of the artifact in transit
+          # between jobs. This is not tamper-proofing: the checksum travels in
+          # the same artifact as the tarball, so it only catches truncation or
+          # bit-rot, not a malicious swap.
+          if ! sha256sum -c "${TARBALL}.sha256"; then
+            echo "ERROR: SHA256 verification failed for ${TARBALL}"
+            exit 1
+          fi
+
+          # Verify the release exists and is published (not a draft)
+          IS_DRAFT=$(gh release view "$VERSION" --json isDraft --jq '.isDraft' 2>/dev/null || echo "missing")
+          if [ "$IS_DRAFT" = "missing" ]; then
+            echo "ERROR: Release $VERSION does not exist. Create it with release.yml first."
+            exit 1
+          fi
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "ERROR: Release $VERSION is a draft. Publish it before uploading tarballs."
+            exit 1
+          fi
+
+          gh release upload "$VERSION" "${TARBALL}" "${TARBALL}.sha256" --clobber
+          echo "Uploaded ${TARBALL} and checksum to release $VERSION"

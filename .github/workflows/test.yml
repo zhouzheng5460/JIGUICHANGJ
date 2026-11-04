@@ -1,0 +1,459 @@
+name: Test
+
+on:
+  # No paths-ignore: validate is a required check on main, and a workflow skipped
+  # by a path filter never reports it, so docs-only PRs would wait forever. The
+  # changes job below decides whether the suite needs to run (#3230).
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # Skip the suite for PRs that only touch non-code files. A PR runs the suite
+  # unless ALL its changed files (rename sources included) match the docs
+  # patterns, so mixed docs+code PRs still run. A job skipped by its `if`
+  # reports success, so the required validate check still reports on docs-only
+  # PRs. Fail closed: an API error, or a file list shorter than the PR's
+  # changed_files count (the files API caps at 3000), counts as a code change.
+  # workflow_dispatch and workflow_call have no PR, so they always run.
+  changes:
+    name: detect code changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PR_NUMBER" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          is_docs() {
+            case "$1" in
+              *.md | docs/* | LICENSE | .editorconfig | .gitattributes | .vscode/* | .github/ISSUE_TEMPLATE/*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          expected=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.changed_files')
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | [.filename, (.previous_filename // "")] | @tsv' > "$RUNNER_TEMP/files.tsv"
+          listed=$(wc -l < "$RUNNER_TEMP/files.tsv" | tr -d ' ')
+          code=false
+          if ! [[ "$expected" =~ ^[0-9]+$ ]] || [ "$listed" -eq 0 ] || [ "$listed" -lt "$expected" ]; then
+            code=true
+          fi
+          while IFS=$'\t' read -r path prev; do
+            if ! is_docs "$path"; then code=true; fi
+            if [ -n "$prev" ] && ! is_docs "$prev"; then code=true; fi
+          done < "$RUNNER_TEMP/files.tsv"
+          echo "Changed files listed: $listed of $expected; code=$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # A prettier reformat cannot change behaviour, rendering, or a11y, so when the
+  # rackula-format-bot pushes a "chore: prettier auto-format" commit, only the
+  # validate gate (which re-runs format:check, the reason the commit re-triggers
+  # CI) needs to run. Detect that commit here so the behaviour jobs can skip it.
+  # A PAT push makes github.actor the token owner, not the bot, so the commit
+  # author/subject is the reliable signal. See issue #2840.
+  detect:
+    name: detect autoformat commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      autoformat: ${{ steps.check.outputs.autoformat }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - id: check
+        run: |
+          author="$(git log -1 --format='%an')"
+          subject="$(git log -1 --format='%s')"
+          if [ "$author" = "rackula-format-bot" ] && [ "$subject" = "chore: prettier auto-format" ]; then
+            echo "Autoformat commit detected; behaviour jobs will be skipped."
+            echo "autoformat=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "autoformat=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  api:
+    name: api (typecheck + tests)
+    needs: [changes, detect]
+    # Fail open: skip only on a confirmed docs-only PR or a confirmed autoformat
+    # detection. A failed or cancelled changes or detect job must not silently
+    # skip the behaviour tests.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && !(needs.detect.result == 'success' && needs.detect.outputs.autoformat == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1"
+
+      # The workers-pool storage contract runs under Vitest on Node (workerd via
+      # Miniflare), not Bun, so Node is needed alongside Bun for this job.
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+
+      - name: Install API dependencies
+        working-directory: api
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck API
+        working-directory: api
+        run: bun run typecheck
+
+      - name: Run API tests (filesystem driver)
+        working-directory: api
+        run: bun test
+
+      # Slice 2 (#2625): the same storage contract against the R2 driver inside
+      # workerd via Miniflare, plus the R2-specific prune/quota/asset specs.
+      - name: Run R2 storage contract (workers pool)
+        working-directory: api
+        run: npx vitest run --config vitest.workers.config.ts
+
+  validate:
+    name: validate
+    needs: changes
+    # Fail closed: skip only when changes confirmed a docs-only PR. A failed
+    # changes job still runs the gate.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check compose parity
+        run: bash scripts/check-compose-persist-parity.sh
+
+      - name: Check self-host header and build-env parity
+        run: bash scripts/check-header-parity.sh
+
+      - name: Check .trivyignore entry format
+        run: bash scripts/check-trivyignore.sh .trivyignore
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The CF `_headers` generator must not drift from the nginx source of
+      # truth it transcribes. `--check` diffs it against
+      # deploy/security-headers.conf in both directions. It shipped in #3092
+      # with no callers; this is the caller.
+      - name: Check Cloudflare header generator parity
+        run: node scripts/gen-headers.mjs --check
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Run unit tests
+        run: npm run test:run
+
+      # Typecheck the Svelte + TS sources. Closes the #2794 blindspot where a
+      # svelte-check/tsc error could merge green because no gate ran it.
+      - name: Run svelte-check
+        run: npm run check
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-chromium-
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run smoke E2E tests
+        run: npm run test:e2e:smoke
+
+      # The smoke E2E webServer runs `npm run build`, so dist/ exists here. Scan
+      # the built HTML for inline <script> tags (must be none, so the CSP can
+      # stay script-src 'self').
+      - name: Scan dist for inline scripts
+        run: bash scripts/check-header-parity.sh --with-build
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # Tier 2/3 of the two-tier E2E model (spike #1994). The full browser suite
+  # runs on the self-hosted e2e runner only after the baseline smoke passes.
+  # Org PRs use the e2e-trusted environment (auto-runs); fork PRs use
+  # e2e-approval, which requires ggfevans to review and approve before any
+  # untrusted code executes on the homelab runner.
+  #
+  # Opt-in: this tier runs only when the repository variable E2E_SELF_HOSTED is
+  # set to 'true'. An unset variable evaluates to false, so the default is to
+  # skip. Set it to 'true' once a runner carrying the e2e label is registered.
+  # Reason: with no such runner online the job is never picked up, so it queues
+  # until the 24 hour dispatch timeout and then reports a false red on every
+  # open PR. That is not merge-blocking (continue-on-error below), but it leaves
+  # each PR at mergeStateStatus UNSTABLE, which blocks --auto merge.
+  e2e-self-hosted:
+    name: e2e (self-hosted full suite)
+    needs: [validate, detect]
+    # Fail open on detect; still gate on validate succeeding, PR context, and
+    # the E2E_SELF_HOSTED opt-in described above.
+    if: ${{ !cancelled() && needs.validate.result == 'success' && github.event_name == 'pull_request' && !(needs.detect.result == 'success' && needs.detect.outputs.autoformat == 'true') && vars.E2E_SELF_HOSTED == 'true' }}
+    # Advisory, not merge-blocking. Per spike #1994 the self-hosted tier is
+    # *additive* to the GH-hosted chromium smoke (the validate job), which stays
+    # the hard gate. This job runs on a single homelab VM (one runner, one host)
+    # — a SPOF — so a failure here (runner down, unprovisioned, flake) must not
+    # block PRs. continue-on-error keeps the full-suite result visible as signal
+    # while letting the overall Test run conclude green.
+    continue-on-error: true
+    # Surface the tolerated result to the notify job below. continue-on-error
+    # masks the job result (needs.<job>.result reads 'success' even on failure),
+    # so an always-run capture step records the real outcome into this output and
+    # the notify job keys off it (#2856).
+    outputs:
+      e2e_result: ${{ steps.capture-e2e-outcome.outputs.result }}
+    runs-on: [self-hosted, e2e]
+    # Parallelise the full suite on the pve-prod ephemeral e2e runner (VMID 360,
+    # more cores); playwright.config.ts reads PW_WORKERS (else Playwright default).
+    env:
+      PW_WORKERS: 8
+    timeout-minutes: 30
+    environment: ${{ github.event.pull_request.head.repo.full_name == 'RackulaLives/Rackula' && 'e2e-trusted' || 'e2e-approval' }}
+    permissions:
+      contents: read
+    steps:
+      # The e2e runner is ephemeral (snapshot-reverts to @clean per job), so the
+      # workspace normally starts pristine. This wipe is a cheap safety net (e.g. a
+      # JIT runner that somehow reused a dirty _work) so actions/checkout's clean
+      # can never fail with "not uptodate; will not remove" — start from a clean slate.
+      - name: Clean self-hosted workspace
+        run: |
+          if [ -n "$GITHUB_WORKSPACE" ] && [ -d "$GITHUB_WORKSPACE" ]; then
+            find "$GITHUB_WORKSPACE" -mindepth 1 -delete
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-full-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-full-
+
+      - name: Install Playwright browsers
+        # --with-deps installs OS libraries via apt and needs root; fall back to a
+        # plain browser install — the self-hosted e2e runner already has the OS libs baked in.
+        run: npx playwright install --with-deps || npx playwright install
+
+      - name: Run full E2E tests
+        id: run-e2e
+        run: npm run test:e2e
+
+      # Persist the test result into a job output for the notify job. This step
+      # always runs and always succeeds, so the output is set even when the test
+      # step above fails (which, under continue-on-error, does not fail the run).
+      # Any non-success outcome (a test failure, or an infra failure in an earlier
+      # step that skipped the test) is recorded as a failure to page on; workflow
+      # cancellation is filtered out by the notify job's !cancelled() guard.
+      - name: Capture E2E outcome
+        id: capture-e2e-outcome
+        if: always()
+        run: echo "result=${{ steps.run-e2e.outcome == 'success' && 'success' || 'failure' }}" >> "$GITHUB_OUTPUT"
+
+      # The full config (e2e/playwright.config.ts) uses the blob reporter in CI,
+      # which writes to blob-report/. View it with `npx playwright merge-reports
+      # --reporter html ./blob-report`, the same as the sharded test-full.yml.
+      - name: Upload blob report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: blob-report-self-hosted
+          path: blob-report/
+          retention-days: 7
+
+  # Advisory red must page a human, not wait to be noticed (#2856). Because the
+  # e2e-self-hosted job stays continue-on-error (single-runner SPOF, see above),
+  # its failure is otherwise silent. Mirror the notify-on-failure pattern from
+  # test-full.yml: file one labelled tracking issue, or comment on the existing
+  # one, so repeated failures land on a single issue instead of spamming new
+  # ones. Runs on GitHub-hosted infra with the built-in token + gh, so it uses
+  # reliable infra and keeps the issues-write token off the homelab runner. It
+  # pages when the job ran and did not pass; a runner that never dispatches the
+  # job (fully offline) runs no steps, so it cannot page here.
+  notify-e2e-self-hosted:
+    name: notify on self-hosted e2e failure
+    needs: e2e-self-hosted
+    if: ${{ !cancelled() && needs.e2e-self-hosted.outputs.e2e_result == 'failure' }}
+    runs-on: ubuntu-latest
+    # issues: write is scoped to this GitHub-hosted notification job only, so the
+    # token that can open or comment on issues never runs on the self-hosted
+    # runner; the e2e job itself needs no issue permissions.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Notify on failure
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: "Self-hosted E2E suite failing (advisory)"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Dedup on the exact title so repeated failures update one issue. The
+          # shared ci-failure label groups CI trackers; the distinct title keeps
+          # this advisory tracker separate from test-full.yml's weekly/nightly one.
+          EXISTING=$(gh issue list --state open --label ci-failure --limit 100 \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | first | .number // empty")
+          BODY="Advisory self-hosted full E2E suite failed: $RUN_URL ($GITHUB_EVENT_NAME, ref $GITHUB_REF, $(date -u +%Y-%m-%dT%H:%M:%SZ))"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create \
+              --title "$TITLE" \
+              --label "automated,ci-failure" \
+              --body "$BODY
+
+          This is the additive self-hosted E2E tier (spike #1994): advisory, so it does not block PRs. A notification here means the self-hosted run did not pass: a real test failure, a flake, or an error while the job ran (for example a dependency or browser install failure). A runner that never picks up the job runs no steps and cannot page here, so if runs stop appearing, check that the e2e runner is online. See the blob-report-self-hosted artifact on the run for details."
+          fi
+
+  visual:
+    name: visual regression
+    needs: [changes, detect]
+    # Fail open: skip only on a confirmed docs-only PR or a confirmed autoformat
+    # detection. A failed or cancelled changes or detect job must not silently
+    # skip the behaviour tests.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && !(needs.detect.result == 'success' && needs.detect.outputs.autoformat == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-chromium-
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run visual regression tests
+        run: npm run test:e2e:visual
+
+      # Diff, actual, and expected images land in test-results/ on failure.
+      - name: Upload visual diff artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: visual-regression-diff
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  a11y:
+    name: a11y (axe-core)
+    needs: [changes, detect]
+    # Fail open: skip only on a confirmed docs-only PR or a confirmed autoformat
+    # detection. A failed or cancelled changes or detect job must not silently
+    # skip the behaviour tests.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && !(needs.detect.result == 'success' && needs.detect.outputs.autoformat == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-chromium-
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run axe-core accessibility scans
+        run: npm run test:e2e:a11y
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: playwright-report-a11y
+          path: playwright-report/
+          retention-days: 7

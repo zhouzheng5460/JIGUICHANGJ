@@ -1,0 +1,212 @@
+﻿=== NOTES ===
+DIAG 鐢诲竷/鍙栨櫙: {"canvasBox":{"x":953.8125,"y":185,"width":393.1875,"height":668},"canvasAspect":0.589,"engineAspect":0.5883233532934131,"orthoTop":1.0560655131408498,"cameraMode":"ortho","viewPreset":"iso","racks":[{"id":"rack-1","groupX":-0.2913,"frameOpacity":1,"sideOpacity":0.32},{"id":"rack-2","groupX":0.2913,"frameOpacity":1,"sideOpacity":0.32}]}
+A 鍑犱綍瀵归綈: {"deviceCount":12,"misaligned":[],"topDeviceMaxY":0.530733,"rackInnerTop":0.5334,"topDeviceFits":true}
+鍒囨瑙嗗浘鍚?preset = front
+棰勬壂鎻忕偣浣? {"ptRack1":{"gx":0.102,"gy":0.36,"cx":993.917625,"cy":425.48000000000013},"ptRack2":{"gx":0.542,"gy":0.36,"cx":1166.920125,"cy":425.48000000000013},"ptEmpty":{"gx":0.03,"gy":0.03,"cx":965.608125,"cy":205.04}}
+B1 鏈烘煖A寮圭獥: {"rack1Point":{"gx":0.102,"gy":0.36,"cx":993.917625,"cy":425.48000000000013},"rack1PopupNames":["鏈烘煖 A / 涓绘煖"],"rack1Popup":true}
+C1 浠栨煖鍗婇€忔槑: {"selected":"rack-1","rack1FrameOpacity":1,"rack2FrameOpacity":0.18,"dimsOther":true}
+鐐圭┖鐧芥竻绌洪€変腑: {"selectedRack":null,"selectedDevice":null,"orthoTop":1.1316055979643764,"cleared":true}
+B2 鏈烘煖B寮圭獥: {"rack1Point":{"gx":0.102,"gy":0.36,"cx":993.917625,"cy":425.48000000000013},"rack1PopupNames":["鏈烘煖 A / 涓绘煖"],"rack1Popup":true,"rack2Point":{"gx":0.542,"gy":0.36,"cx":1166.920125,"cy":425.48000000000013},"rack2PopupNames":["鏈烘煖 B / 鎵╁睍鏌?],"rack2Popup":true}
+C2 浠栨煖鍗婇€忔槑: {"selected":"rack-2","rack1FrameOpacity":0.18,"rack2FrameOpacity":1,"dimsOther":true}
+F1 鏈烘煖濉厖姣? {"halfWidthUsed":0.2443,"orthoTop":0.5190597964930643,"aspect":0.5883233532934131,"fill":0.8}
+D 閬僵杞粨: {"clickPoint":{"gx":0.174,"gy":0.465,"cx":1022.227125,"cy":495.6200000000002},"devicePopupNames":["褰掓。瀛樺偍"],"maskActive":true,"hasMaskUniform":1,"outlineColour":"ff79c6","outlineThickness":1.6,"selectedDevice":"dev2-storage","pinkPct":1.19,"pinkMaxRG":190,"pinkSpanFrac":0.868}
+F2 璁惧濉厖姣? {"selectedId":"dev2-storage","halfWidthDevice":0.2013,"orthoTop":0.4025397299292773,"aspect":0.5883233532934131,"fill":0.85}
+E 杞粨閬尅寮卞寲: {"frontPink":1.19,"frontMaxRG":190,"topPink":0.73,"topMaxRG":91,"frontPinkBack":0.41,"weakenedWhenOccluded":true}
+G 鏃犻€変腑澶嶄綅: {"emptyPoint":{"gx":0.03,"gy":0.03,"cx":965.608125,"cy":205.04},"popupAfterEmptyClick":[],"sceneTop":1.1316055979643764,"topAfterReset":1.1316055979643764,"topAfterEmptyClick":1.1316055979643764,"selectedAfter":{"rack":null,"device":null},"cleared":true,"restoresSceneFraming":true}
+H 鍦烘櫙涓婚鍒囨崲: {"lightTheme":"light","lightBgLuma":192.9,"darkTheme":"dark","darkBgLuma":2.1,"switches":true}
+I 2D鈫?D 鏈烘煖鍚屾: {"rackBox":{"x":391.0791320800781,"y":370.8705139160156,"width":205.75540161132812,"height":288.0575256347656},"clickedAt":{"x":494,"y":641.6,"ratio":0.94},"selectedRack":"rack-1","selectedDevice":null,"popupNames":["鏈烘煖 A / 涓绘煖"],"synced":true}
+J 2D 娓呯┖鈫?D 澶嶄綅: {"canvasBox":{"x":320,"y":48,"width":1040,"height":902},"selectedRack":null,"selectedDevice":null,"openPopups":0,"cleared":true}
+
+=== RESULTS ===
+{
+  "diagnostic": {
+    "canvasBox": {
+      "x": 953.8125,
+      "y": 185,
+      "width": 393.1875,
+      "height": 668
+    },
+    "canvasAspect": 0.589,
+    "engineAspect": 0.5883233532934131,
+    "orthoTop": 1.0560655131408498,
+    "cameraMode": "ortho",
+    "viewPreset": "iso",
+    "racks": [
+      {
+        "id": "rack-1",
+        "groupX": -0.2913,
+        "frameOpacity": 1,
+        "sideOpacity": 0.32
+      },
+      {
+        "id": "rack-2",
+        "groupX": 0.2913,
+        "frameOpacity": 1,
+        "sideOpacity": 0.32
+      }
+    ]
+  },
+  "geometry": {
+    "deviceCount": 12,
+    "misaligned": [],
+    "topDeviceMaxY": 0.530733,
+    "rackInnerTop": 0.5334,
+    "topDeviceFits": true
+  },
+  "rackPopup": {
+    "rack1Point": {
+      "gx": 0.102,
+      "gy": 0.36,
+      "cx": 993.917625,
+      "cy": 425.48000000000013
+    },
+    "rack1PopupNames": [
+      "鏈烘煖 A / 涓绘煖"
+    ],
+    "rack1Popup": true,
+    "rack2Point": {
+      "gx": 0.542,
+      "gy": 0.36,
+      "cx": 1166.920125,
+      "cy": 425.48000000000013
+    },
+    "rack2PopupNames": [
+      "鏈烘煖 B / 鎵╁睍鏌?
+    ],
+    "rack2Popup": true
+  },
+  "rackDimming1": {
+    "selected": "rack-1",
+    "rack1FrameOpacity": 1,
+    "rack2FrameOpacity": 0.18,
+    "dimsOther": true
+  },
+  "clearViaEmpty": {
+    "selectedRack": null,
+    "selectedDevice": null,
+    "orthoTop": 1.1316055979643764,
+    "cleared": true
+  },
+  "rackDimming2": {
+    "selected": "rack-2",
+    "rack1FrameOpacity": 0.18,
+    "rack2FrameOpacity": 1,
+    "dimsOther": true
+  },
+  "rackFill": {
+    "halfWidthUsed": 0.2443,
+    "orthoTop": 0.5190597964930643,
+    "aspect": 0.5883233532934131,
+    "fill": 0.8
+  },
+  "outline": {
+    "clickPoint": {
+      "gx": 0.174,
+      "gy": 0.465,
+      "cx": 1022.227125,
+      "cy": 495.6200000000002
+    },
+    "devicePopupNames": [
+      "褰掓。瀛樺偍"
+    ],
+    "maskActive": true,
+    "hasMaskUniform": 1,
+    "outlineColour": "ff79c6",
+    "outlineThickness": 1.6,
+    "selectedDevice": "dev2-storage",
+    "pinkPct": 1.19,
+    "pinkMaxRG": 190,
+    "pinkSpanFrac": 0.868
+  },
+  "deviceFill": {
+    "selectedId": "dev2-storage",
+    "halfWidthDevice": 0.2013,
+    "orthoTop": 0.4025397299292773,
+    "aspect": 0.5883233532934131,
+    "fill": 0.85
+  },
+  "occlusion": {
+    "frontPink": 1.19,
+    "frontMaxRG": 190,
+    "topPink": 0.73,
+    "topMaxRG": 91,
+    "frontPinkBack": 0.41,
+    "weakenedWhenOccluded": true
+  },
+  "resetOnClear": {
+    "emptyPoint": {
+      "gx": 0.03,
+      "gy": 0.03,
+      "cx": 965.608125,
+      "cy": 205.04
+    },
+    "popupAfterEmptyClick": [],
+    "sceneTop": 1.1316055979643764,
+    "topAfterReset": 1.1316055979643764,
+    "topAfterEmptyClick": 1.1316055979643764,
+    "selectedAfter": {
+      "rack": null,
+      "device": null
+    },
+    "cleared": true,
+    "restoresSceneFraming": true
+  },
+  "theme": {
+    "lightTheme": "light",
+    "lightBgLuma": 192.9,
+    "darkTheme": "dark",
+    "darkBgLuma": 2.1,
+    "switches": true
+  },
+  "sync2dTo3d": {
+    "rackBox": {
+      "x": 391.0791320800781,
+      "y": 370.8705139160156,
+      "width": 205.75540161132812,
+      "height": 288.0575256347656
+    },
+    "clickedAt": {
+      "x": 494,
+      "y": 641.6,
+      "ratio": 0.94
+    },
+    "selectedRack": "rack-1",
+    "selectedDevice": null,
+    "popupNames": [
+      "鏈烘煖 A / 涓绘煖"
+    ],
+    "synced": true
+  },
+  "clear2dTo3d": {
+    "canvasBox": {
+      "x": 320,
+      "y": 48,
+      "width": 1040,
+      "height": 902
+    },
+    "selectedRack": null,
+    "selectedDevice": null,
+    "openPopups": 0,
+    "cleared": true
+  }
+}
+
+=== CHECKS ===
+{
+  "A_geometry": true,
+  "B_rackPopup": true,
+  "C_rackDimming": true,
+  "D_outline": true,
+  "E_occlusion": true,
+  "F1_rackFill": true,
+  "F2_deviceFill": true,
+  "G_resetFraming": true,
+  "H_theme": true,
+  "I_sync2dTo3d": true,
+  "J_clear2dResets3d": true
+}
+
+=== SUMMARY === ALL PASS
+
+=== ERRORS (0) ===
+

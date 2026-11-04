@@ -1,0 +1,148 @@
+import { test, expect } from "./helpers/base-test";
+import path from "path";
+import {
+  gotoWithRack,
+  PLATFORM_MODIFIER,
+  loadFileFromDisk,
+  locators,
+} from "./helpers";
+
+/**
+ * Carlton Migration Test (#883)
+ *
+ * Regression test for issue #879: User Carlton (@carltonwb) could not load
+ * their saved rack due to "Invalid layout: rack.devices.5.position: Invalid input".
+ *
+ * The file contains a device with position: 1.5 (half-U offset).
+ * This tests that:
+ * 1. The file loads successfully
+ * 2. All 9 devices are present (renders as 11 elements in dual-view mode:
+ *    6 front-only + 1 rear-only + 2 both-face devices × 2 views = 11 total)
+ * 3. The carrier-first load path snaps the legacy 1.5U rail position up to the
+ *    nearest whole U (U2, internal unit 12)
+ * 4. Save/reload cycle works
+ *
+ * Note: The position snapping (1.5U → U2 / internal 12) is verified by unit
+ * tests in src/tests/schemas.test.ts. E2E tests verify the user-visible
+ * behavior (file loads, devices render, layout persists).
+ */
+test.describe("Carlton Migration (#879)", () => {
+  const fixturePath = path.join(
+    process.cwd(),
+    "e2e",
+    "fixtures",
+    "carlton-5123home.Rackula.zip",
+  );
+
+  test.beforeEach(async ({ page }) => {
+    // Load a rack via share link so the app is in a ready state for file loading
+    await gotoWithRack(page);
+  });
+
+  test("loads Carlton's zip file with decimal position successfully", async ({
+    page,
+  }) => {
+    // Load the fixture file
+    await loadFileFromDisk(page, fixturePath);
+
+    // Wait for success toast to confirm load completed
+    await expect(page.locator(locators.toast.success).first()).toBeVisible({
+      timeout: 10000,
+    });
+
+    // Verify layout loaded - rack name "5123home" should be visible
+    // Uses getByText for reliable text matching across SVG/HTML
+    // Text appears in toolbar name + dual-view name — use .first() to avoid strict mode
+    await expect(page.getByText("5123home").first()).toBeVisible({
+      timeout: 5000,
+    });
+  });
+
+  test("all devices load and UnRaid Server is present", async ({ page }) => {
+    // Load the fixture file
+    await loadFileFromDisk(page, fixturePath);
+
+    // Wait for success toast
+    await expect(page.locator(locators.toast.success).first()).toBeVisible({
+      timeout: 10000,
+    });
+
+    // Verify all 9 devices are present
+    // Dual-view renders: 6 front-only + 1 rear-only + 2 both-face (×2 views) = 11 total
+    await expect(page.locator(locators.rack.device)).toHaveCount(11, {
+      timeout: 5000,
+    });
+
+    // Verify the custom named device "UnRaid Server" is present
+    // This is the device with position 1.5 that caused the original bug
+    // Uses .first() because dual-view mode shows the device twice (front and rear)
+    await expect(page.getByText("UnRaid Server").first()).toBeVisible({
+      timeout: 5000,
+    });
+
+    // Carrier-first (#2158): a legacy fractional rail position snaps to the
+    // nearest whole U on load. 1.5U (internal 9) snaps up to U2 (internal 12).
+    // Note: getByText returns the <text> element; the attribute is on the parent .rack-device
+    const unraidDeviceContainer = page
+      .locator(locators.rack.device)
+      .filter({ hasText: "UnRaid Server" })
+      .first();
+    await expect(unraidDeviceContainer).toHaveAttribute(
+      "data-device-position",
+      "12",
+      { timeout: 5000 },
+    );
+  });
+
+  test("save and reload preserves layout", async ({ page }) => {
+    // Load the fixture file
+    await loadFileFromDisk(page, fixturePath);
+
+    // Wait for success toast
+    await expect(page.locator(locators.toast.success).first()).toBeVisible({
+      timeout: 10000,
+    });
+
+    // Verify initial load worked - rack name should be visible
+    // Text appears in toolbar name + dual-view name — use .first() to avoid strict mode
+    await expect(page.getByText("5123home").first()).toBeVisible({
+      timeout: 5000,
+    });
+
+    // Save the layout via keyboard shortcut (Ctrl/Cmd+S)
+    const downloadPromise = page.waitForEvent("download");
+    await page.keyboard.press(`${PLATFORM_MODIFIER}+s`);
+    const download = await downloadPromise;
+
+    // Verify filename has correct extension (default save is YAML, #1754)
+    expect(download.suggestedFilename()).toContain("5123home");
+    expect(download.suggestedFilename()).toMatch(/\.rackula\.yaml$/);
+
+    // Save to stable test output location
+    const savedPath = test.info().outputPath("carlton-resaved.rackula.yaml");
+    await download.saveAs(savedPath);
+
+    // Reload with a fresh rack state
+    await gotoWithRack(page);
+
+    // Load the re-saved file
+    await loadFileFromDisk(page, savedPath);
+
+    // Verify it loads successfully
+    await expect(page.locator(locators.toast.success).first()).toBeVisible({
+      timeout: 10000,
+    });
+
+    // Verify layout is preserved - rack name should be visible
+    // Text appears in toolbar name + dual-view name — use .first() to avoid strict mode
+    await expect(page.getByText("5123home").first()).toBeVisible({
+      timeout: 5000,
+    });
+
+    // Verify the UnRaid Server device is still present
+    // Uses .first() because dual-view mode shows the device twice (front and rear)
+    await expect(page.getByText("UnRaid Server").first()).toBeVisible({
+      timeout: 5000,
+    });
+  });
+});

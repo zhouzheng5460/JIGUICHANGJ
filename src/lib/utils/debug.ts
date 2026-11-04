@@ -1,0 +1,131 @@
+/**
+ * Debug logging utilities using the debug npm package
+ *
+ * Enable logging in browser console:
+ *   localStorage.debug = 'rackula:*'           // All logs
+ *   localStorage.debug = 'rackula:layout:*'    // Layout module only
+ *   localStorage.debug = 'rackula:*,-rackula:canvas:*'  // All except canvas
+ *
+ * Namespace convention: rackula:module:concern
+ * Examples:
+ *   - rackula:layout:state
+ *   - rackula:layout:device
+ *   - rackula:canvas:transform
+ *   - rackula:dnd:render
+ *   - rackula:persistence:api
+ *   - rackula:persistence:health
+ *   - rackula:dialog:import
+ */
+import Debug from "debug";
+import { safeGetItem, safeSetItem } from "$lib/utils/safe-storage";
+
+// Module-level loggers
+export const layoutDebug = {
+  state: Debug("rackula:layout:state"),
+  device: Debug("rackula:layout:device"),
+  group: Debug("rackula:layout:group"),
+  schema: Debug("rackula:layout:schema"),
+};
+
+export const canvasDebug = {
+  transform: Debug("rackula:canvas:transform"),
+  panzoom: Debug("rackula:canvas:panzoom"),
+  focus: Debug("rackula:canvas:focus"),
+};
+
+export const dndDebug = {
+  render: Debug("rackula:dnd:render"),
+};
+
+export const appDebug = {
+  mobile: Debug("rackula:app:mobile"),
+  export: Debug("rackula:app:export"),
+};
+
+export const selectionDebug = {
+  state: Debug("rackula:selection:state"),
+};
+
+export const dialogDebug = {
+  import: Debug("rackula:dialog:import"),
+};
+
+/** Debug loggers for archive import and extraction flows. */
+export const archiveDebug = {
+  /** Recoverable diagnostics for archive extraction and image loading. */
+  extract: Debug("rackula:archive:extract"),
+};
+
+export const persistenceDebug = {
+  api: Debug("rackula:persistence:api"),
+  health: Debug("rackula:persistence:health"),
+};
+
+export const sessionDebug = {
+  storage: Debug("rackula:session:storage"),
+};
+
+/** Debug logger for the shared plain-language import/decode failure path (#2989): file-import (yaml.ts) and share-link decode (share.ts) route their raw parse/validation detail here instead of console.warn. */
+export const importDebug = {
+  validation: Debug("rackula:import:validation"),
+};
+
+// Create shared instances for reuse
+const generalLog = Debug("rackula:general");
+const infoLog = Debug("rackula:info");
+const warnLog = Debug("rackula:warn");
+const errorLog = Debug("rackula:error");
+
+// Legacy compatibility - maps to new namespaces
+// This maintains backward compatibility with existing code
+export const debug = {
+  log: generalLog,
+  info: infoLog,
+  warn: warnLog,
+  error: errorLog,
+  group: (label: string) => generalLog(`--- ${label} ---`),
+  groupEnd: () => {},
+  isEnabled: () => Debug.enabled("rackula:*"),
+  devicePlace: (data: {
+    slug: string;
+    position: number;
+    passedFace?: string;
+    effectiveFace: string;
+    deviceName: string;
+    isFullDepth: boolean;
+    result: string;
+  }) => layoutDebug.device("place %O", data),
+  deviceMove: (data: {
+    index: number;
+    deviceName: string;
+    face: string;
+    fromPosition: number;
+    toPosition: number;
+    result: string;
+  }) => layoutDebug.device("move %O", data),
+  /**
+   * Warn that removing a device cascaded into deleting its connections
+   * (#639), so a layout that looked fully wired can silently lose links
+   * without a trace unless this is surfaced.
+   */
+  deviceRemove: (data: {
+    deviceName: string;
+    connectionsRemoved: number;
+    connectionIds: string[];
+  }) => layoutDebug.device("remove %O", data),
+};
+
+// Auto-enable in development (browser only)
+if (typeof window !== "undefined") {
+  // Use Vite's built-in env types
+  const isDev = import.meta.env.DEV;
+  const isTest = import.meta.env.MODE === "test";
+
+  // Auto-enable in dev mode (unless already configured)
+  if (isDev && !isTest && !safeGetItem("debug")) {
+    if (safeSetItem("debug", "rackula:*")) {
+      // Enable immediately so logs work without page reload
+      Debug.enable("rackula:*");
+    }
+  }
+}

@@ -1,0 +1,246 @@
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { defineConfig, type Plugin } from "vite";
+import { existsSync, readFileSync } from "fs";
+import { execFileSync } from "child_process";
+import { resolve } from "path";
+
+// Read version from package.json
+const pkg = JSON.parse(readFileSync("./package.json", "utf-8"));
+
+// Git info helpers with graceful fallbacks
+interface GitInfo {
+  commitHash: string;
+  branchName: string;
+  isDirty: boolean;
+}
+
+const GIT_COMMAND_TIMEOUT_MS = 3000;
+
+function getGitStderr(error: unknown): string {
+  if (!error || typeof error !== "object") {
+    return "";
+  }
+
+  const stderr = (error as { stderr?: string }).stderr;
+  return typeof stderr === "string" ? stderr.trim() : "";
+}
+
+function isGitTimeoutError(error: unknown): boolean {
+  const hasTimeoutMarker = (value: string): boolean =>
+    value.includes("ETIMEDOUT") || value.toLowerCase().includes("timed out");
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  if (hasTimeoutMarker(error.message)) {
+    return true;
+  }
+
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (cause instanceof Error && hasTimeoutMarker(cause.message)) {
+    return true;
+  }
+  if (cause && typeof cause === "object") {
+    return (cause as { code?: unknown }).code === "ETIMEDOUT";
+  }
+
+  return false;
+}
+
+function runGit(args: string[]): string {
+  try {
+    return execFileSync("git", args, {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: GIT_COMMAND_TIMEOUT_MS,
+    }).trim();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const stderr = getGitStderr(error);
+    const message = stderr
+      ? `Failed to run git ${args.join(" ")}: ${detail} | stderr: ${stderr}`
+      : `Failed to run git ${args.join(" ")}: ${detail}`;
+    throw new Error(message, {
+      cause: error,
+    });
+  }
+}
+
+function tryRunGit(args: string[]): string | null {
+  try {
+    return runGit(args);
+  } catch (error) {
+    if (isGitTimeoutError(error)) {
+      return null;
+    }
+    return "";
+  }
+}
+
+function getGitInfo(): GitInfo {
+  if (!existsSync(".git")) {
+    // Docker builds strip .git (.dockerignore); the APP_COMMIT build-arg
+    // carries the short hash instead (matching git rev-parse --short HEAD).
+    return {
+      commitHash: process.env.APP_COMMIT?.trim() ?? "",
+      branchName: "",
+      isDirty: false,
+    };
+  }
+
+  const commitHash = tryRunGit(["rev-parse", "--short", "HEAD"]) ?? "";
+  const branchName = tryRunGit(["rev-parse", "--abbrev-ref", "HEAD"]) ?? "";
+  // Intentionally include untracked files in dirtyOutput so isDirty reflects
+  // any local workspace deviation, not only tracked-file modifications.
+  const dirtyOutput = tryRunGit(["status", "--porcelain"]);
+  if (dirtyOutput === null) {
+    process.emitWarning(
+      "[vite] git status timed out; treating dirty state as unknown and defaulting isDirty=true.",
+    );
+  }
+
+  return {
+    commitHash,
+    branchName,
+    isDirty: dirtyOutput === null || dirtyOutput !== "",
+  };
+}
+
+const gitInfo = getGitInfo();
+
+// Single build timestamp reused by the __BUILD_TIME__ define and version.json
+// so they never drift within one build.
+const buildTime = new Date().toISOString();
+
+/**
+ * Emit a static `version.json` (`{ version, commit, buildTime }`) into the build
+ * output, served at `/version.json`. This makes the frontend's version readable
+ * over HTTP without executing JS, powering the post-release version-alignment
+ * test. Exposes only build metadata — no secrets.
+ */
+function emitVersionJson(info: {
+  version: string;
+  commit: string;
+  buildTime: string;
+}): Plugin {
+  return {
+    name: "rackula:version-json",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "version.json",
+        source: `${JSON.stringify(info, null, 2)}\n`,
+      });
+    },
+  };
+}
+
+export default defineConfig(() => ({
+  // Every deployment target serves from the root: Cloudflare Workers Static
+  // Assets (count.racku.la), Docker/LXC self-host, and local dev. Nothing sets
+  // VITE_BASE_PATH today.
+  //
+  // Sub-path hosting is NOT supported, despite this override existing. Vite
+  // rewrites the URLs it generates, but index.html and login.html also carry
+  // root-absolute references it leaves alone -- /config.js and the favicons --
+  // so under a non-root base the bundle would load from the sub-path while the
+  // runtime config was still fetched from the domain root, and the app would
+  // boot without its storage mode. Making those base-aware is a prerequisite
+  // for ever using this.
+  base: process.env.VITE_BASE_PATH || "/",
+  publicDir: "static",
+  plugins: [
+    svelte(),
+    emitVersionJson({
+      version: pkg.version,
+      commit: gitInfo.commitHash,
+      buildTime,
+    }),
+  ],
+  server: {
+    watch: {
+      // Ignore git worktrees and other development artifacts
+      // Vite already ignores .git/, node_modules/, test-results/, cacheDir, build.outDir
+      ignored: ["**/.worktree/**", "**/coverage/**", "**/playwright-report/**"],
+    },
+  },
+  define: {
+    // Inject version at build time
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    // Inject build timestamp at build time (ISO 8601)
+    __BUILD_TIME__: JSON.stringify(buildTime),
+    // Git commit hash (short form, e.g., "e2bf857")
+    __COMMIT_HASH__: JSON.stringify(gitInfo.commitHash),
+    // Git branch name (e.g., "main", "feat/414-dev-build-info")
+    __BRANCH_NAME__: JSON.stringify(gitInfo.branchName),
+    // Git dirty state (true if uncommitted changes exist)
+    __GIT_DIRTY__: JSON.stringify(gitInfo.isDirty),
+    // Environment indicator (development, production, or empty for local detection)
+    __BUILD_ENV__: JSON.stringify(process.env.VITE_ENV || ""),
+    // Note: __PERSIST_ENABLED__ removed - API availability is now detected at runtime
+    // See src/lib/storage/availability.svelte.ts
+  },
+  resolve: {
+    alias: {
+      $lib: "/src/lib",
+    },
+  },
+  build: {
+    // Don't inline any assets as base64 - always use file references
+    // This prevents the data-images chunk from containing base64 data
+    assetsInlineLimit: 0,
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        login: resolve(__dirname, "login.html"),
+      },
+      output: {
+        // Manual chunks to reduce main bundle size below 500kB
+        manualChunks(id: string): string | undefined {
+          // Vendor libraries - split by functionality
+          if (id.includes("node_modules")) {
+            // Validation library
+            if (id.includes("/zod/")) return "vendor-zod";
+            // Svelte runtime + Svelte component libraries
+            // bits-ui must be in the same chunk as svelte for correct ESM
+            // initialization order
+            if (id.includes("/svelte/") || id.includes("/bits-ui/"))
+              return "vendor-svelte";
+            // Markdown rendering and sanitization (notes preview)
+            if (id.includes("/marked/") || id.includes("/dompurify/"))
+              return "vendor-markdown";
+            // Pan/zoom functionality
+            if (id.includes("/panzoom/")) return "vendor-panzoom";
+            // Archive handling (save/load)
+            if (id.includes("/jszip/") || id.includes("/js-yaml/"))
+              return "vendor-archive";
+            // Icon libraries
+            if (
+              id.includes("/@lucide/svelte/") ||
+              id.includes("/simple-icons/")
+            )
+              return "vendor-icons";
+            // Search library
+            if (id.includes("/fuse.js/")) return "vendor-fuse";
+            // Compression library (used by jszip)
+            if (id.includes("/pako/")) return "vendor-pako";
+          }
+          // App data files - split for lazy loading potential
+          // Guard against node_modules paths that might contain these strings
+          if (
+            !id.includes("node_modules") &&
+            id.includes("/src/lib/data/brandPacks/")
+          )
+            return "data-brandpacks";
+          if (
+            !id.includes("node_modules") &&
+            id.includes("/src/lib/data/bundledImages")
+          )
+            return "data-images";
+        },
+      },
+    },
+  },
+}));

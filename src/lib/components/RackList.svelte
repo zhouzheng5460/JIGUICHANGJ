@@ -1,0 +1,539 @@
+<!--
+  RackList Component
+  Displays list of all racks with selection, delete, and context menu actions
+-->
+<script lang="ts">
+  import { getLayoutStore } from "$lib/stores/layout.svelte";
+  import { getSelectionStore } from "$lib/stores/selection.svelte";
+  import { getToastStore } from "$lib/stores/toast.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import RackContextMenu from "./RackContextMenu.svelte";
+  import Tooltip from "./Tooltip.svelte";
+
+  interface Props {
+    /** Callback to create a new rack */
+    onnewrack?: () => void;
+    /** Context menu: export rack callback */
+    onexport?: (rackIds: string[]) => void;
+    /** Context menu: focus rack callback (pans and zooms canvas to fit the rack) */
+    onfocus?: (rackIds: string[]) => void;
+    /** Context menu: edit rack callback */
+    onedit?: (rackId: string) => void;
+    /** Context menu: rename rack callback */
+    onrename?: (rackId: string) => void;
+    /** Context menu: duplicate rack callback */
+    onduplicate?: (rackId: string) => void;
+  }
+
+  let { onnewrack, onexport, onfocus, onedit, onrename, onduplicate }: Props =
+    $props();
+
+  const layoutStore = getLayoutStore();
+  const selectionStore = getSelectionStore();
+  const toastStore = getToastStore();
+
+  // Delete confirmation state
+  let deleteConfirmOpen = $state(false);
+  let rackToDelete = $state<{
+    id: string;
+    name: string;
+    isGroup?: boolean;
+    deviceCount?: number;
+  } | null>(null);
+
+  const racks = $derived(layoutStore.racks);
+  const activeRackId = $derived(layoutStore.activeRackId);
+  const rackGroups = $derived(layoutStore.rack_groups);
+
+  // Get set of rack IDs that belong to groups
+  const groupedRackIds = $derived(
+    new Set(rackGroups.flatMap((g) => g.rack_ids)),
+  );
+
+  // Ungrouped racks only
+  const ungroupedRacks = $derived(
+    racks.filter((r) => !groupedRackIds.has(r.id)),
+  );
+
+  // Get total device count for a bayed rack group
+  function getGroupDeviceCount(group: { rack_ids: string[] }): number {
+    return group.rack_ids.reduce((sum, rackId) => {
+      const rack = layoutStore.getRackById(rackId);
+      return sum + (rack?.devices.length ?? 0);
+    }, 0);
+  }
+
+  // Get the first rack in a group (for height info)
+  function getGroupFirstRack(group: { rack_ids: string[] }) {
+    const [firstRackId] = group.rack_ids;
+    if (!firstRackId) return undefined;
+    return layoutStore.getRackById(firstRackId);
+  }
+
+  function handleRackClick(rackId: string) {
+    layoutStore.setActiveRack(rackId);
+    selectionStore.selectRack(rackId);
+  }
+
+  function handleGroupClick(groupId: string) {
+    const group = rackGroups.find((g) => g.id === groupId);
+    const firstRackId = group?.rack_ids[0];
+    if (firstRackId) {
+      // Select the first rack in the group to make the whole group active
+      layoutStore.setActiveRack(firstRackId);
+      selectionStore.selectRack(firstRackId);
+    }
+  }
+
+  function handleDeleteClick(
+    event: MouseEvent,
+    rack: { id: string; name: string },
+  ) {
+    event.stopPropagation(); // Prevent rack selection
+    initiateRackDelete(rack);
+  }
+
+  function handleGroupDeleteClick(
+    event: MouseEvent,
+    group: { id: string; name?: string; rack_ids: string[] },
+  ) {
+    event.stopPropagation();
+    initiateGroupDelete(group);
+  }
+
+  /**
+   * Initiate delete flow for a single rack (used by X button and context menu)
+   */
+  function initiateRackDelete(rack: { id: string; name: string }) {
+    rackToDelete = rack;
+    deleteConfirmOpen = true;
+  }
+
+  /**
+   * Initiate delete flow for a bayed rack group (used by X button and context menu)
+   */
+  function initiateGroupDelete(group: {
+    id: string;
+    name?: string;
+    rack_ids: string[];
+  }) {
+    const deviceCount = getGroupDeviceCount(group);
+    rackToDelete = {
+      id: group.id,
+      name: group.name ?? "Bayed Rack",
+      isGroup: true,
+      deviceCount,
+    };
+    deleteConfirmOpen = true;
+  }
+
+  function confirmDelete() {
+    const target = rackToDelete;
+    if (target) {
+      if (target.isGroup) {
+        // Delete all racks in the group, then the group
+        const group = rackGroups.find((g) => g.id === target.id);
+        if (group) {
+          // Delete racks first
+          for (const rackId of group.rack_ids) {
+            layoutStore.deleteRack(rackId);
+          }
+          // Group auto-deletes when last rack removed
+        }
+        toastStore.showToast(
+          `Deleted "${target.name}"${target.deviceCount ? ` (${target.deviceCount} devices removed)` : ""}`,
+          "info",
+        );
+      } else {
+        const deviceCount =
+          layoutStore.getRackById(target.id)?.devices.length ?? 0;
+        layoutStore.deleteRack(target.id);
+        toastStore.showToast(
+          `Deleted "${target.name}"${deviceCount > 0 ? ` (${deviceCount} devices removed)` : ""}`,
+          "info",
+        );
+      }
+      selectionStore.clearSelection();
+    }
+    deleteConfirmOpen = false;
+    rackToDelete = null;
+  }
+
+  function cancelDelete() {
+    deleteConfirmOpen = false;
+    rackToDelete = null;
+  }
+
+  function getDeleteMessage(): string {
+    if (!rackToDelete) return "";
+    if (rackToDelete.isGroup) {
+      const count = rackToDelete.deviceCount ?? 0;
+      if (count > 0) {
+        return `Delete "${rackToDelete.name}"? This will remove ${count} device${count === 1 ? "" : "s"} across all bays.`;
+      }
+      return `Delete "${rackToDelete.name}"? All bays will be removed.`;
+    }
+    const deviceCount =
+      layoutStore.getRackById(rackToDelete.id)?.devices.length ?? 0;
+    if (deviceCount > 0) {
+      return `Delete "${rackToDelete.name}"? This will remove ${deviceCount} device${deviceCount === 1 ? "" : "s"}.`;
+    }
+    return `Delete "${rackToDelete.name}"? This rack is empty.`;
+  }
+</script>
+
+<div class="rack-list">
+  <div class="rack-list-header">
+    <span class="rack-count">
+      {rackGroups.length + ungroupedRacks.length} Rack{rackGroups.length +
+        ungroupedRacks.length !==
+      1
+        ? "s"
+        : ""}
+    </span>
+    {#if onnewrack}
+      <Tooltip text="New Rack" position="bottom">
+        {#snippet triggerChild({ props })}
+          <button
+            {...props}
+            type="button"
+            class="new-rack-btn"
+            onclick={onnewrack}
+            aria-label="New Rack"
+            data-testid="btn-new-rack"
+          >
+            +
+          </button>
+        {/snippet}
+      </Tooltip>
+    {/if}
+  </div>
+
+  <div class="rack-items" role="list" aria-label="Rack list">
+    <!-- Bayed rack groups as single entries -->
+    {#each rackGroups as group (group.id)}
+      {@const firstRack = getGroupFirstRack(group)}
+      {@const isActive = group.rack_ids.includes(activeRackId ?? "")}
+      {@const deviceCount = getGroupDeviceCount(group)}
+      {@const bayCount = group.rack_ids.length}
+      <RackContextMenu
+        onexport={() => onexport?.(group.rack_ids)}
+        onfocus={() => onfocus?.(group.rack_ids)}
+        onedit={() => {
+          // For groups, edit the first rack in the group
+          if (group.rack_ids[0]) onedit?.(group.rack_ids[0]);
+        }}
+        onrename={() => {
+          // For groups, rename the first rack in the group
+          if (group.rack_ids[0]) onrename?.(group.rack_ids[0]);
+        }}
+        onduplicate={() => {
+          // For groups, duplicate the first rack in the group
+          if (group.rack_ids[0]) onduplicate?.(group.rack_ids[0]);
+        }}
+        ondelete={() => initiateGroupDelete(group)}
+      >
+        {#snippet trigger(triggerProps)}
+          <!-- The row is a role="listitem", not a role="option": it holds an
+               interactive delete button, and an option may not contain focusable
+               descendants (nested-interactive, #2255). It stays a click/keyboard
+               focus stop for rack selection, so the noninteractive-tabindex
+               warning is expected here. The context-menu trigger props spread
+               directly onto it (render delegation), so there is no roleless
+               wrapper between the list and the listitem
+               (aria-required-children, #2254). -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div
+            {...triggerProps}
+            class="rack-item"
+            class:active={isActive}
+            onclick={() => handleGroupClick(group.id)}
+            onkeydown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === " ") e.preventDefault();
+              if (e.key === "Enter" || e.key === " ")
+                handleGroupClick(group.id);
+            }}
+            role="listitem"
+            aria-current={isActive ? "true" : undefined}
+            tabindex="0"
+            data-testid="rack-item-group-{group.id}"
+          >
+            <span class="rack-indicator" aria-hidden="true">
+              {isActive ? "●" : "○"}
+            </span>
+            <span class="rack-info">
+              <span class="rack-name">{group.name ?? "Bayed Rack"}</span>
+              <span class="rack-meta"
+                >{firstRack?.height ?? "?"}U · {bayCount}-bay · {deviceCount} device{deviceCount !==
+                1
+                  ? "s"
+                  : ""}</span
+              >
+            </span>
+            <button
+              type="button"
+              class="rack-delete"
+              onclick={(e) => handleGroupDeleteClick(e, group)}
+              aria-label="Delete {group.name ?? 'bayed rack'}"
+              title="Delete bayed rack"
+            >
+              ✕
+            </button>
+          </div>
+        {/snippet}
+      </RackContextMenu>
+    {/each}
+
+    <!-- Ungrouped racks -->
+    {#each ungroupedRacks as rack (rack.id)}
+      {@const isActive = rack.id === activeRackId}
+      {@const deviceCount = rack.devices.length}
+      <RackContextMenu
+        onexport={() => onexport?.([rack.id])}
+        onfocus={() => onfocus?.([rack.id])}
+        onedit={() => onedit?.(rack.id)}
+        onrename={() => onrename?.(rack.id)}
+        onduplicate={() => onduplicate?.(rack.id)}
+        ondelete={() => initiateRackDelete({ id: rack.id, name: rack.name })}
+      >
+        {#snippet trigger(triggerProps)}
+          <!-- The row is a role="listitem", not a role="option": it holds an
+               interactive delete button, and an option may not contain focusable
+               descendants (nested-interactive, #2255). It stays a click/keyboard
+               focus stop for rack selection, so the noninteractive-tabindex
+               warning is expected here. The context-menu trigger props spread
+               directly onto it (render delegation), so there is no roleless
+               wrapper between the list and the listitem
+               (aria-required-children, #2254). -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div
+            {...triggerProps}
+            class="rack-item"
+            class:active={isActive}
+            onclick={() => handleRackClick(rack.id)}
+            onkeydown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === " ") e.preventDefault();
+              if (e.key === "Enter" || e.key === " ") handleRackClick(rack.id);
+            }}
+            role="listitem"
+            aria-current={isActive ? "true" : undefined}
+            tabindex="0"
+            data-testid="rack-item-{rack.id}"
+          >
+            <span class="rack-indicator" aria-hidden="true">
+              {isActive ? "●" : "○"}
+            </span>
+            <span class="rack-info">
+              <span class="rack-name">{rack.name}</span>
+              <span class="rack-meta"
+                >{rack.height}U · {deviceCount} device{deviceCount !== 1
+                  ? "s"
+                  : ""}</span
+              >
+            </span>
+            <button
+              type="button"
+              class="rack-delete"
+              onclick={(e) =>
+                handleDeleteClick(e, { id: rack.id, name: rack.name })}
+              aria-label="Delete {rack.name}"
+              title="Delete rack"
+            >
+              ✕
+            </button>
+          </div>
+        {/snippet}
+      </RackContextMenu>
+    {/each}
+
+    {#if rackGroups.length === 0 && ungroupedRacks.length === 0}
+      <div class="empty-state">
+        <p class="empty-message">No racks yet</p>
+        <p class="empty-hint">Create your first rack to get started</p>
+      </div>
+    {/if}
+  </div>
+</div>
+
+<ConfirmDialog
+  open={deleteConfirmOpen}
+  title="Delete Rack"
+  message={getDeleteMessage()}
+  confirmLabel="Delete"
+  onconfirm={confirmDelete}
+  oncancel={cancelDelete}
+/>
+
+<style>
+  .rack-list {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  .rack-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--colour-border);
+  }
+
+  .rack-count {
+    font-size: var(--font-size-sm);
+    color: var(--colour-text-muted);
+  }
+
+  .new-rack-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-8);
+    height: var(--space-8);
+    padding: 0;
+    font-size: var(--font-size-lg);
+    font-weight: 400;
+    line-height: 1;
+    color: var(--colour-text-muted);
+    background: var(--colour-surface-secondary);
+    border: 1px solid var(--colour-border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition:
+      background-color var(--duration-fast) ease,
+      color var(--duration-fast) ease,
+      border-color var(--duration-fast) ease;
+  }
+
+  .new-rack-btn:hover {
+    color: var(--colour-text);
+    background: var(--colour-surface-hover);
+    border-color: var(--colour-border-hover);
+  }
+
+  .new-rack-btn:focus-visible {
+    outline: 2px solid var(--colour-selection);
+    outline-offset: 2px;
+  }
+
+  .new-rack-btn:active {
+    background: var(--colour-surface-active);
+  }
+
+  .rack-items {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-2);
+  }
+
+  .rack-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    text-align: left;
+    cursor: pointer;
+    transition: all var(--duration-fast) var(--ease-out);
+  }
+
+  .rack-item:hover {
+    background: var(--colour-surface-hover);
+  }
+
+  .rack-item.active {
+    background: var(--colour-surface-active);
+    border-color: var(--colour-selection);
+  }
+
+  .rack-item:focus-visible {
+    outline: 2px solid var(--colour-selection);
+    outline-offset: -2px;
+  }
+
+  .rack-indicator {
+    flex-shrink: 0;
+    color: var(--colour-selection);
+  }
+
+  .rack-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-0-5, 2px);
+    min-width: 0;
+  }
+
+  .rack-name {
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-medium);
+    color: var(--colour-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rack-meta {
+    font-size: var(--font-size-xs);
+    color: var(--colour-text-muted);
+  }
+
+  .rack-delete {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--colour-text-muted);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    opacity: 0;
+    transition: all var(--duration-fast) var(--ease-out);
+  }
+
+  .rack-item:hover .rack-delete,
+  .rack-item:focus-within .rack-delete {
+    opacity: 1;
+  }
+
+  .rack-delete:hover {
+    background: var(--colour-error);
+    color: var(--colour-text-on-error, #fff);
+  }
+
+  .rack-delete:focus-visible {
+    opacity: 1;
+    outline: 2px solid var(--colour-selection);
+    outline-offset: 1px;
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-6);
+    text-align: center;
+  }
+
+  .empty-message {
+    margin: 0;
+    font-size: var(--font-size-base);
+    color: var(--colour-text);
+  }
+
+  .empty-hint {
+    margin: var(--space-1) 0 0;
+    font-size: var(--font-size-sm);
+    color: var(--colour-text-muted);
+  }
+</style>

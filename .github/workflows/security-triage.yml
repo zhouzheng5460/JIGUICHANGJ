@@ -1,0 +1,282 @@
+name: Security Triage
+
+# Fires when CodeQL or Trivy completes on the default branch. Runs Claude Code
+# (authenticated via a Claude subscription OAuth token, NOT an API key) to triage
+# net-new Code Scanning alerts: dismiss false positives, open a draft PR with a
+# suggested fix for real findings.
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN, generated locally by a Claude Pro/Max subscriber
+# with `claude setup-token` and stored as a repo secret. This bills against the
+# subscription, not API credits. IMPORTANT: this job must NOT expose
+# ANTHROPIC_API_KEY - if present it takes auth precedence and bills the API account.
+# See docs/deployment/SECURITY-TRIAGE.md.
+
+on:
+  workflow_run:
+    workflows: ["CodeQL", "Trivy Security Scan"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      triggering_workflow:
+        description: "Workflow name to simulate"
+        # Constrained to the valid scanner names so a typo (e.g. trailing space
+        # or wrong case) can't bypass the per-scanner concurrency key below.
+        type: choice
+        required: false
+        default: "CodeQL"
+        options:
+          - CodeQL
+          - Trivy Security Scan
+
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: write
+  issues: write
+
+jobs:
+  triage:
+    name: Triage new findings
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # Serialize triage per scanner so two same-tool completions can't race on
+    # branch/PR creation for the same alerts. CodeQL and Trivy still run in
+    # parallel (distinct group keys). Do NOT cancel in-progress: this job opens
+    # PRs and dismisses alerts, so a cancelled run could orphan a pushed branch.
+    concurrency:
+      group: security-triage-${{ github.event.workflow_run.name || inputs.triggering_workflow }}
+      cancel-in-progress: false
+
+    # Skip if the triggering scan failed before uploading SARIF, unless this is a
+    # manual dispatch (which has no triggering workflow to inspect).
+    if: >-
+      github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure'
+
+    env:
+      TRIGGERING_WORKFLOW: >-
+        ${{ github.event_name == 'workflow_dispatch'
+            && inputs.triggering_workflow
+            || github.event.workflow_run.name }}
+
+      # Empty on manual dispatch (no workflow_run in the payload): the gate and
+      # the playbook treat "no scan start time" as "triage all currently-open
+      # alerts" so a dry run actually sees something.
+      RUN_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+
+    steps:
+      # Gate the expensive Claude invocation on whether the triggering scan
+      # actually produced net-new open Code Scanning alerts. GitHub turns
+      # uploaded SARIF into alerts asynchronously, so we poll the Code Scanning
+      # API (folding in the old fixed 90s wait) and short-circuit as soon as a
+      # net-new alert appears. A zero-alert scan skips both the wait and the
+      # Claude step below - no action invocation, no subscription usage.
+      #
+      # Net-new mirrors the playbook's definition: an open alert for the
+      # triggering tool whose created_at is at or after (scan start - 30 min).
+      # On manual dispatch there is no scan start time, so any currently-open
+      # alert for the tool counts (matching the dry-run playbook behaviour).
+      - name: Check for net-new Code Scanning alerts
+        id: gate
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TRIGGERING_WORKFLOW: ${{ env.TRIGGERING_WORKFLOW }}
+          RUN_STARTED_AT: ${{ env.RUN_STARTED_AT }}
+          # workflow_run completions need the SARIF-processing wait; a manual
+          # dispatch queries whatever alerts exist right now without waiting.
+          IS_SCAN_COMPLETION: ${{ github.event_name == 'workflow_run' }}
+        with:
+          script: |
+            const workflowName = (process.env.TRIGGERING_WORKFLOW || '').trim();
+            const runStartedAt = (process.env.RUN_STARTED_AT || '').trim();
+            const isScanCompletion = process.env.IS_SCAN_COMPLETION === 'true';
+
+            // Map the triggering workflow display name to the SARIF tool name
+            // the Code Scanning API indexes alerts under. Unknown names fall
+            // back to no tool filter so we never silently miss real findings.
+            const toolByWorkflow = {
+              'CodeQL': 'CodeQL',
+              'Trivy Security Scan': 'Trivy',
+            };
+            const toolName = toolByWorkflow[workflowName];
+            if (!toolName) {
+              core.warning(`Unknown triggering workflow "${workflowName}"; not filtering by tool.`);
+            }
+
+            // Net-new cutoff: scan start minus 30 minutes, matching the playbook
+            // (the margin absorbs scan plus SARIF-processing lag). With no scan
+            // start time (manual dispatch) there is no time filter.
+            let cutoffMs = null;
+            if (runStartedAt) {
+              const startedMs = Date.parse(runStartedAt);
+              if (Number.isNaN(startedMs)) {
+                core.warning(`Could not parse RUN_STARTED_AT "${runStartedAt}"; not time-filtering.`);
+              } else {
+                cutoffMs = startedMs - 30 * 60 * 1000;
+              }
+            }
+
+            async function countNetNewAlerts() {
+              const params = {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                ref: 'refs/heads/main',
+                sort: 'created',
+                direction: 'desc',
+                per_page: 100,
+              };
+              if (toolName) params.tool_name = toolName;
+
+              // Newest first: we can stop paging once alerts predate the cutoff.
+              let netNew = 0;
+              for await (const res of github.paginate.iterator(
+                github.rest.codeScanning.listAlertsForRepo,
+                params,
+              )) {
+                for (const alert of res.data) {
+                  if (cutoffMs === null) {
+                    netNew += 1;
+                    continue;
+                  }
+                  const createdMs = Date.parse(alert.created_at);
+                  if (Number.isNaN(createdMs)) continue;
+                  if (createdMs >= cutoffMs) {
+                    netNew += 1;
+                  } else {
+                    // Sorted desc by created: everything after this is older.
+                    return netNew;
+                  }
+                }
+              }
+              return netNew;
+            }
+
+            // Poll the full budget (~90s on a scan completion, the old fixed
+            // sleep) to absorb async SARIF processing before deciding. We do NOT
+            // exit on the first alert seen: GitHub processes a scan's alerts
+            // incrementally, so a too-early "yes" could run Claude while only
+            // some of the scan's alerts are queryable, and it would miss the
+            // rest. Letting the budget elapse gives SARIF time to fully land,
+            // matching the settling window the old fixed sleep provided. The
+            // zero-alert case (the one this gate exists to skip) already polls
+            // the whole budget either way, so this costs it nothing. A manual
+            // dispatch does not wait: it queries once.
+            const attempts = isScanCompletion ? [0, 30, 30, 30] : [0];
+            let count = 0;
+            for (let i = 0; i < attempts.length; i++) {
+              if (attempts[i] > 0) await new Promise((r) => setTimeout(r, attempts[i] * 1000));
+              try {
+                count = await countNetNewAlerts();
+              } catch (err) {
+                // Fail secure: on a persistent API error, do NOT silently skip
+                // triage of potentially real findings. Let Claude run.
+                if (i === attempts.length - 1) {
+                  core.warning(`Code Scanning API error after retries: ${err.message}. Proceeding to triage to avoid skipping real alerts.`);
+                  core.setOutput('has_alerts', 'true');
+                  return;
+                }
+                core.warning(`Code Scanning API error (attempt ${i + 1}): ${err.message}. Retrying.`);
+              }
+            }
+
+            core.info(`Net-new open ${toolName || 'all-tool'} alerts: ${count}`);
+            core.setOutput('has_alerts', count > 0 ? 'true' : 'false');
+
+      - name: Checkout repository
+        if: steps.gate.outputs.has_alerts == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+
+      # Runners have no default git identity; Claude's git commit would abort
+      # without this. Use the github-actions[bot] identity for triage commits.
+      - name: Configure git identity
+        if: steps.gate.outputs.has_alerts == 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run security triage
+        if: steps.gate.outputs.has_alerts == 'true'
+        uses: anthropics/claude-code-action@56cf60fde42f7b19c3abfd5c9c48b69a1288461f # v1
+        # Pass the OAuth token both as the action input and as the env var the
+        # underlying Claude CLI reads, so auth binds regardless of whether this
+        # pinned action version exposes the claude_code_oauth_token input.
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        with:
+          # Subscription OAuth token (NOT anthropic_api_key) so usage bills against
+          # the Claude Pro/Max subscription rather than API credits.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Invoke the /secure-coding:secure-coding skill first to ground your
+            analysis and any drafted fixes in secure-coding practice, then read
+            .github/prompts/security-triage.md and follow it exactly.
+
+            Triage net-new open Code Scanning alerts from the "${{ env.TRIGGERING_WORKFLOW }}"
+            scan that started at ${{ env.RUN_STARTED_AT }}.
+
+            Repository: ${{ github.repository }}
+            Default branch: main
+            Current HEAD SHA: ${{ github.sha }}
+          # Load the vendored secure-coding skill from the repo: headless CI does
+          # not auto-install marketplace plugins (see docs/deployment/SECURITY-TRIAGE.md
+          # and .claude/cloud-setup.sh), so --plugin-dir loads it deterministically.
+          claude_args: '--plugin-dir .github/claude-plugins/secure-coding --allowedTools "Bash,Read,Write,Edit,Glob,Grep"'
+
+      # Safety net for a failure mode seen in practice: the triage step can
+      # commit and push a fix/security-<alert> branch but end its turn before
+      # running `gh pr create`, stranding the fix on an orphan branch with no PR.
+      # The alert then stays open and nothing surfaces for review. This step
+      # opens a draft PR for any fix/security-* branch that is ahead of main and
+      # has never had a PR, so a drafted fix can never be silently lost. Runs even
+      # if the triage step failed (always()), so a crash mid-run is still caught.
+      #
+      # Caveat: PRs opened with GITHUB_TOKEN do not trigger pull_request CI
+      # workflows (GitHub's recursion guard). CodeRabbit and CodeAnt still review
+      # via their own app webhooks. A maintainer marks the draft ready, or pushes
+      # a commit, to run CI before merge.
+      - name: Ensure a PR exists for every drafted security fix
+        if: always() && steps.gate.outputs.has_alerts == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          # Fail loud, not silent: a swallowed fetch failure (network/auth) would
+          # leave the scan seeing no fix/security-* refs and report "opened 0",
+          # which looks like success while the backstop did nothing. A glob
+          # refspec that matches no branches still exits 0 (main is fetched), so
+          # this only fires on a genuine fetch failure.
+          if ! git fetch origin main 'refs/heads/fix/security-*:refs/remotes/origin/fix/security-*' --quiet; then
+            echo "::warning::Safety-net could not fetch fix/security-* branches from origin; the PR backstop did not run."
+            exit 1
+          fi
+          opened=0
+          for ref in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep -E '^origin/fix/security-' || true); do
+            branch="${ref#origin/}"
+            # Skip if this branch ever had a PR (open, closed, or merged): a
+            # closed/merged PR means a human already handled it; do not reopen.
+            if [ -n "$(gh pr list --head "$branch" --state all --json number --jq '.[].number' 2>/dev/null)" ]; then
+              continue
+            fi
+            # Only branches with a real commit ahead of main.
+            if [ "$(git rev-list --count "origin/main..$ref" 2>/dev/null || echo 0)" -eq 0 ]; then
+              continue
+            fi
+            alert="${branch#fix/security-}"
+            echo "::warning::Triage left ${branch} without a PR; opening a draft PR as a safety net."
+            if gh pr create --draft --base main --head "$branch" \
+              --title "security: triage finding (alert #${alert})" \
+              --body "Automated safety-net PR. The triage run pushed \`${branch}\` but did not open a PR; this step opened one so the drafted fix is not lost. See alert #${alert} at https://github.com/${REPO}/security/code-scanning/${alert} for details. CI (pull_request workflows) does not run on PRs opened by GITHUB_TOKEN, so a maintainer should mark this PR ready, or push a commit, to trigger CI before merge." \
+              --label security --label automated; then
+              opened=$((opened + 1))
+            else
+              echo "::warning::Failed to open a safety-net PR for ${branch}."
+            fi
+          done
+          echo "Safety-net opened ${opened} PR(s)."

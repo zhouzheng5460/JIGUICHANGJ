@@ -1,0 +1,331 @@
+# Rackula nginx configuration — Docker template (envsubst processed)
+# CROSS-REF: deploy/lxc/nginx.conf is the LXC variant (static, no envsubst).
+# Key differences: Docker uses envsubst variables (${API_HOST}, ${API_PORT}, etc.)
+# and auth_request for local/OIDC auth; LXC uses a static snippet for token
+# injection and has no auth_request support. When updating routing or proxy
+# logic in one, check if the other needs the same change.
+
+# Authorization header handling for API proxying.
+# - If API_WRITE_TOKEN is configured and request method is PUT/DELETE,
+#   inject "Bearer <token>" for upstream write-route auth.
+# - Otherwise preserve any incoming Authorization header.
+# This avoids per-request `if` usage and limits token injection to write methods.
+# Note: Authorization headers are not logged by default nginx access log formats.
+map $request_method $rackula_is_write_method {
+    default 0;
+    PUT 1;
+    DELETE 1;
+}
+
+map "${API_WRITE_TOKEN}" $rackula_has_api_write_token {
+    default 1;
+    "" 0;
+}
+
+map "$rackula_is_write_method:$rackula_has_api_write_token" $rackula_api_authorization {
+    default $http_authorization;
+    "1:1" "Bearer ${API_WRITE_TOKEN}";
+}
+
+# Track whether auth mode is effectively disabled for fallback behavior.
+# RACKULA_AUTH_MODE is normalized by the Docker entrypoint wrapper.
+map "${RACKULA_AUTH_MODE}" $rackula_auth_mode_none {
+    default 0;
+    "" 1;
+    ~*^none$ 1;
+}
+
+map "${RACKULA_AUTH_MODE}" $rackula_auth_mode_local {
+    default 0;
+    ~*^local$ 1;
+}
+
+# Serve static login page only for GET requests in local auth mode.
+# POST /auth/login must pass through to the API for credential validation.
+map "$request_method:$rackula_auth_mode_local" $rackula_serve_local_login_page {
+    default 0;
+    "GET:1" 1;
+}
+
+# When RACKULA_TRUST_PROXY=1 (or true/yes), X-Forwarded-Proto is honoured so
+# the auth redirect uses the external scheme (https) rather than the internal
+# one (http). Disabled by default — only enable when nginx is behind a trusted
+# reverse proxy that sets this header. Only http/https are accepted.
+map "${RACKULA_TRUST_PROXY}" $rackula_trust_proxy {
+    default 0;
+    ~*^(1|true|yes)$ 1;
+}
+
+map "$rackula_trust_proxy:$http_x_forwarded_proto" $real_scheme {
+    default        $scheme;
+    "1:http"       http;
+    "1:https"      https;
+}
+
+log_format rackula_auth_upstream_failure
+    'auth_upstream_unavailable '
+    'remote_addr=$remote_addr request_uri=$request_uri '
+    'upstream_status=$upstream_status upstream_addr=$upstream_addr';
+
+server {
+    listen ${RACKULA_LISTEN_PORT};
+    ${RACKULA_IPV6_LISTEN}
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied expired no-cache no-store private auth;
+    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml application/javascript application/json image/svg+xml;
+
+    # Cache static assets (fingerprinted by Vite — safe to cache forever)
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+
+        # nginx drops ALL server-level add_header directives when a location block
+        # defines its own — include shared security headers to avoid drift.
+        include /etc/nginx/snippets/security-headers.conf;
+    }
+
+    # Runtime storage mode config, written to tmpfs by the entrypoint wrapper
+    # (the html root is read-only; this exact-match alias overrides the
+    # browser-mode default the build ships at /usr/share/nginx/html/config.js).
+    # no-cache: a stale mode after a redeploy or env change would silently
+    # flip storage behavior.
+    # Auth-gated like the SPA shell (location /): only index.html loads this
+    # file post-auth; the pre-auth login page (login.html) does not load it,
+    # so gating cannot break the login flow. The internal probe returns 204
+    # when auth mode is none.
+    location = /config.js {
+        auth_request /_rackula_auth_check;
+        error_page 401 = @auth_login_redirect;
+        alias /tmp/rackula-config/config.js;
+        add_header Cache-Control "no-cache" always;
+
+        # nginx drops ALL server-level add_header directives when a location block
+        # defines its own; include shared security headers to avoid drift.
+        include /etc/nginx/snippets/security-headers.conf;
+    }
+
+    # API proxy (when sidecar is running)
+    # Use variable to defer DNS resolution to request time (allows nginx to start without API)
+    # Exact-match endpoints below set an explicit upstream URI and use
+    # $is_args$args to carry the query string. The prefix /api/ location uses a
+    # URI-less proxy_pass instead, which forwards the rewritten path and query
+    # string automatically (see that block for details).
+    # Configure via environment variables: API_HOST (default: rackula-api), API_PORT (default: 3001), API_WRITE_TOKEN (optional)
+    # Note: NGINX_ENVSUBST_FILTER in Dockerfile restricts substitution to runtime variables only
+    
+    # API health check - used by frontend to detect persistence API availability
+    # Returns 502/503 if API is unavailable (intentional - signals API is down)
+    # Preserves query parameters for potential diagnostics/verbosity flags
+    location = /api/health {
+        resolver ${NGINX_RESOLVER} valid=30s;
+        set $api_upstream ${API_HOST};
+        proxy_pass http://$api_upstream:${API_PORT}/health$is_args$args;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 3s;
+        # No fallback - let it fail to signal API unavailability
+    }
+
+    # Public auth bootstrap endpoints.
+    # When auth mode is enabled, these remain reachable for login/callback flow.
+    location = /auth/login {
+        # Local auth mode: serve static login page for GET requests only.
+        # POST requests pass through to the API for credential validation.
+        if ($rackula_serve_local_login_page) {
+            rewrite ^ /login.html last;
+        }
+        # OIDC mode: proxy to API for IdP redirect
+        resolver ${NGINX_RESOLVER} valid=30s;
+        set $api_upstream ${API_HOST};
+        proxy_pass http://$api_upstream:${API_PORT}/api/auth/login$is_args$args;
+        include /etc/nginx/snippets/auth-proxy.conf;
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @auth_service_unavailable;
+    }
+
+    location = /auth/callback {
+        # Local auth mode: no OIDC callback needed
+        if ($rackula_auth_mode_local) {
+            return 404;
+        }
+        resolver ${NGINX_RESOLVER} valid=30s;
+        set $api_upstream ${API_HOST};
+        proxy_pass http://$api_upstream:${API_PORT}/api/auth/callback$is_args$args;
+        include /etc/nginx/snippets/auth-proxy.conf;
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @auth_service_unavailable;
+    }
+
+    location = /auth/check {
+        resolver ${NGINX_RESOLVER} valid=30s;
+        set $api_upstream ${API_HOST};
+        proxy_pass http://$api_upstream:${API_PORT}/api/auth/check$is_args$args;
+        include /etc/nginx/snippets/auth-proxy.conf;
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @auth_service_unavailable;
+    }
+
+    location = /auth/logout {
+        resolver ${NGINX_RESOLVER} valid=30s;
+        set $api_upstream ${API_HOST};
+        proxy_pass http://$api_upstream:${API_PORT}/api/auth/logout$is_args$args;
+        include /etc/nginx/snippets/auth-proxy.conf;
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @auth_service_unavailable;
+    }
+
+    location @auth_service_unavailable {
+        default_type text/html;
+        return 503 '<!doctype html><html><head><meta charset="utf-8"><title>Authentication Unavailable</title></head><body><h1>Authentication temporarily unavailable</h1><p>The authentication service is currently unreachable. Please try again in a few moments.</p></body></html>';
+    }
+    
+    # Handle /api and /api/ edge cases - return JSON error, not SPA fallback (#1010)
+    # These paths don't correspond to valid API endpoints
+    location = /api {
+        default_type application/json;
+        return 400 '{"error": "Invalid API path", "hint": "Use /api/layouts, /api/assets, /api/auth/*, or /api/health"}';
+    }
+
+    location = /api/ {
+        default_type application/json;
+        return 400 '{"error": "Invalid API path", "hint": "Use /api/layouts, /api/assets, /api/auth/*, or /api/health"}';
+    }
+
+    location /api/ {
+        resolver ${NGINX_RESOLVER} valid=30s;
+        set $api_upstream ${API_HOST};
+
+        # Own the security headers at the edge for proxied API responses,
+        # including served device images at /api/assets/. The upstream API also
+        # sets X-Content-Type-Options on asset GETs; this is the edge backstop.
+        # nginx add_header REPLACES, not merges: a future bare add_header in this
+        # block would drop every server-level header AND any upstream header of
+        # the same name, silently stripping the upstream nosniff. Keep this
+        # include so the headers are defined here explicitly.
+        include /etc/nginx/snippets/security-headers.conf;
+
+        # Strip /api prefix: /api/layouts -> /layouts
+        # Using rewrite to capture path after /api and forward without prefix
+        rewrite ^/api(/.*)$ $1 break;
+
+        # Query strings are preserved automatically. proxy_pass has no URI part
+        # (it ends at the port), so nginx forwards the request URI set by the
+        # rewrite above, which keeps the original query string. For example,
+        # GET /api/layouts?filter=foo forwards to /layouts?filter=foo.
+        # Do not append $uri$is_args$args here: mixing an explicit URI in
+        # proxy_pass with "rewrite ... break" double-applies the path and can
+        # drop or duplicate query parameters.
+        proxy_pass http://$api_upstream:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $real_scheme;
+        # Authorization resolved by map directives at config scope above.
+        proxy_set_header Authorization $rackula_api_authorization;
+
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+
+        # Handle API unavailable gracefully
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @api_unavailable;
+    }
+
+    location @api_unavailable {
+        default_type application/json;
+        return 503 '{"error": "Persistence API unavailable"}';
+    }
+
+    # Internal auth probe for app-route protection.
+    # API validates the signed session cookie and returns 204 (authorized) or 401 (unauthorized).
+    location = /_rackula_auth_check {
+        internal;
+        if ($rackula_auth_mode_none) {
+            return 204;
+        }
+        resolver ${NGINX_RESOLVER} valid=30s;
+        set $api_upstream ${API_HOST};
+        proxy_pass http://$api_upstream:${API_PORT}/api/auth/check;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 3s;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header X-Forwarded-Proto $real_scheme;
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @auth_check_upstream_error;
+    }
+
+    # If API is unavailable, fail open only when auth mode is explicitly disabled.
+    location @auth_check_upstream_error {
+        access_log /dev/stdout rackula_auth_upstream_failure;
+        if ($rackula_auth_mode_none) {
+            return 204;
+        }
+        return 401;
+    }
+
+    location @auth_login_redirect {
+        # Preserve path and query string in the next= parameter.
+        # Limitation: if $args contains & characters, nginx will split them into
+        # separate query params. Only the first segment stays in next=.
+        # Full URI-encoding requires OpenResty (set_escape_uri), unavailable here.
+        # Explicit absolute URL avoids nginx appending $server_port to $http_host
+        # when the Host header has no port (the root cause of #1713).
+        # $real_scheme honours X-Forwarded-Proto when RACKULA_TRUST_PROXY=1.
+        # $http_host (not X-Forwarded-Host) is used to prevent open-redirect.
+        return 302 $real_scheme://$http_host/auth/login?next=$uri$is_args$args;
+    }
+
+    # Container health check - used by Docker/K8s for liveness/readiness probes
+    # Always returns 200 OK because nginx can serve the frontend even without API
+    # This endpoint checks the frontend container health, not API availability
+    location = /health {
+        access_log off;
+        default_type text/plain;
+        return 200 "OK";
+    }
+
+    # Local auth login page — bypass auth_request to prevent redirect loop.
+    # When auth_mode=local, GET /auth/login rewrites to /login.html, which must
+    # be servable without authentication. Return 404 in other modes.
+    location = /login.html {
+        if ($rackula_auth_mode_local = 0) {
+            return 404;
+        }
+        try_files /login.html =404;
+    }
+
+    # SPA fallback - all routes to index.html
+    location / {
+        auth_request /_rackula_auth_check;
+        error_page 401 = @auth_login_redirect;
+        try_files $uri $uri/ /index.html;
+
+        # The entry document must revalidate on every load: index.html references
+        # the fingerprinted /assets/ bundles by name, so a cached copy pins the
+        # browser (and any edge cache) to the previous deploy's JS. The bundles
+        # themselves stay immutable (see location /assets/).
+        add_header Cache-Control "no-cache" always;
+
+        # nginx drops ALL server-level add_header directives when a location block
+        # defines its own; include shared security headers to avoid drift.
+        include /etc/nginx/snippets/security-headers.conf;
+    }
+
+    # Security headers (single source of truth: deploy/security-headers.conf)
+    include /etc/nginx/snippets/security-headers.conf;
+}

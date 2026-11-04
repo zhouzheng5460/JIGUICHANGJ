@@ -1,0 +1,1176 @@
+/**
+ * Rack Group Domain Module
+ *
+ * Extracted from layout.svelte.ts — handles rack group creation,
+ * updates, deletion, bay management, and raw mutators for undo/redo.
+ */
+
+import type { Rack, RackGroup, LayoutPreset } from "$lib/types";
+import { MAX_RACKS } from "$lib/types/constants";
+import { createDefaultRack } from "$lib/utils/serialization";
+import { layoutDebug } from "$lib/utils/debug";
+// Rack3D 扩展：并柜新增一柜的默认名按当前语言生成
+import { bayRackName } from "$lib/i18n/default-names";
+import { generateRackId, generateGroupId } from "$lib/utils/rack";
+import {
+  createCreateRackGroupCommand,
+  createUpdateRackGroupCommand,
+  createDeleteRackGroupCommand,
+  createAddRackCommand,
+  createDeleteRackCommand,
+  createUpdateRackCommand,
+  createRemoveConnectionCommand,
+  createBatchCommand,
+  type Command,
+  type RackGroupCommandStore,
+} from "../commands";
+import {
+  getRackLifecycleCommandAdapter,
+  type UpdateRacksBatchRecordedFn,
+} from "./rack-actions";
+import { getCommandStoreAdapter } from "./command-adapters";
+import { bindCommandToRack } from "./recorded-rack-actions";
+import { findConnectionsForDevices } from "./recorded-device-type-actions";
+import {
+  planBayedInsert,
+  planRowAfterRemoval,
+  type RackPositionAssignment,
+} from "$lib/utils/rack-row";
+import type { LayoutStateAccess } from "./types";
+
+// =============================================================================
+// Raw Mutators (for undo/redo system — bypass history)
+// =============================================================================
+
+/**
+ * Raw create rack group (bypasses history)
+ * @param ctx - Layout state access
+ * @param group - Group to create
+ */
+export function createRackGroupRaw(
+  ctx: LayoutStateAccess,
+  group: RackGroup,
+): void {
+  const layout = ctx.getLayout();
+  const newGroups = [...(layout.rack_groups ?? []), group];
+  ctx.setLayout({
+    ...layout,
+    rack_groups: newGroups,
+  });
+}
+
+/**
+ * Raw update rack group (bypasses history)
+ * @param ctx - Layout state access
+ * @param id - Group ID
+ * @param updates - Properties to update
+ */
+export function updateRackGroupRaw(
+  ctx: LayoutStateAccess,
+  id: string,
+  updates: Partial<RackGroup>,
+): void {
+  const layout = ctx.getLayout();
+  const newGroups = (layout.rack_groups ?? []).map((g) =>
+    g.id === id ? { ...g, ...updates } : g,
+  );
+  ctx.setLayout({
+    ...layout,
+    rack_groups: newGroups,
+  });
+}
+
+/**
+ * Raw delete rack group (bypasses history)
+ * @param ctx - Layout state access
+ * @param id - Group ID
+ * @returns The deleted group or undefined
+ */
+export function deleteRackGroupRaw(
+  ctx: LayoutStateAccess,
+  id: string,
+): RackGroup | undefined {
+  const group = getRackGroupById(ctx, id);
+  if (!group) return undefined;
+
+  const layout = ctx.getLayout();
+  const newGroups = (layout.rack_groups ?? []).filter((g) => g.id !== id);
+  ctx.setLayout({
+    ...layout,
+    rack_groups: newGroups.length > 0 ? newGroups : undefined,
+  });
+  return group;
+}
+
+/**
+ * Get the command adapter for rack group operations
+ * @param ctx - Layout state access
+ */
+export function getRackGroupCommandAdapter(
+  ctx: LayoutStateAccess,
+): RackGroupCommandStore {
+  return {
+    createRackGroupRaw: (group: RackGroup) => createRackGroupRaw(ctx, group),
+    updateRackGroupRaw: (id: string, updates: Partial<RackGroup>) =>
+      updateRackGroupRaw(ctx, id, updates),
+    deleteRackGroupRaw: (id: string) => deleteRackGroupRaw(ctx, id),
+  };
+}
+
+// =============================================================================
+// Getters
+// =============================================================================
+
+/**
+ * Get a rack group by ID
+ * @param ctx - Layout state access
+ * @param id - Group ID
+ * @returns The group or undefined
+ */
+export function getRackGroupById(
+  ctx: LayoutStateAccess,
+  id: string,
+): RackGroup | undefined {
+  return ctx.getRackGroups().find((g) => g.id === id);
+}
+
+/**
+ * Get the rack group that contains a specific rack
+ * @param ctx - Layout state access
+ * @param rackId - Rack ID
+ * @returns The group or undefined
+ */
+export function getRackGroupForRack(
+  ctx: LayoutStateAccess,
+  rackId: string,
+): RackGroup | undefined {
+  return ctx.getRackGroups().find((g) => g.rack_ids.includes(rackId));
+}
+
+// =============================================================================
+// Validation
+// =============================================================================
+
+/**
+ * Validate that all racks in a group have the same height (for bayed preset)
+ * @param ctx - Layout state access
+ * @param rackIds - Array of rack IDs to validate
+ * @returns Error message if validation fails, undefined if valid
+ */
+export function validateBayedGroupHeights(
+  ctx: LayoutStateAccess,
+  rackIds: string[],
+): string | undefined {
+  if (rackIds.length <= 1) return undefined;
+
+  const heights = new Set<number>();
+  for (const rackId of rackIds) {
+    const rack = ctx.findRack(rackId);
+    if (rack) {
+      heights.add(rack.height);
+    }
+  }
+
+  if (heights.size > 1) {
+    const heightList = Array.from(heights)
+      .sort((a, b) => a - b)
+      .map((h) => `${h}U`)
+      .join(", ");
+    return `Bayed groups require same-height racks. Found heights: ${heightList}`;
+  }
+
+  return undefined;
+}
+
+// =============================================================================
+// Recorded Actions (use undo/redo)
+// =============================================================================
+
+/**
+ * Create a new rack group
+ * @param ctx - Layout state access
+ * @param name - Group name
+ * @param rackIds - Array of rack IDs to include in the group
+ * @param preset - Layout preset (defaults to "row")
+ * @returns The created group or error
+ */
+export function createRackGroup(
+  ctx: LayoutStateAccess,
+  name: string,
+  rackIds: string[],
+  preset?: LayoutPreset,
+): { group?: RackGroup; error?: string } {
+  // Validate at least one rack
+  if (rackIds.length === 0) {
+    return { error: "Group must contain at least one rack" };
+  }
+
+  const layout = ctx.getLayout();
+
+  // Validate all rack IDs exist
+  for (const rackId of rackIds) {
+    if (!layout.racks.find((r) => r.id === rackId)) {
+      return { error: `Rack "${rackId}" not found` };
+    }
+  }
+
+  // Validate no rack is already in another group
+  for (const rackId of rackIds) {
+    const existingGroup = getRackGroupForRack(ctx, rackId);
+    if (existingGroup) {
+      const rackName =
+        layout.racks.find((r) => r.id === rackId)?.name ?? rackId;
+      return {
+        error: `Rack "${rackName}" is already in group "${existingGroup.name ?? existingGroup.id}". Remove it first.`,
+      };
+    }
+  }
+
+  // Validate bayed preset minimum rack count
+  const actualPreset = preset ?? "row";
+  if (actualPreset === "bayed" && rackIds.length < 2) {
+    return { error: "Bayed groups require at least 2 racks" };
+  }
+
+  // Validate bayed preset height requirement
+  if (actualPreset === "bayed") {
+    const heightError = validateBayedGroupHeights(ctx, rackIds);
+    if (heightError) {
+      return { error: heightError };
+    }
+  }
+
+  // Create the group
+  const group: RackGroup = {
+    id: generateGroupId(),
+    name,
+    rack_ids: [...rackIds],
+    layout_preset: actualPreset,
+  };
+
+  // Use recorded action for undo/redo support
+  const history = ctx.getHistory();
+  const adapter = getRackGroupCommandAdapter(ctx);
+  const command = createCreateRackGroupCommand(group, adapter);
+  history.execute(command);
+  ctx.markDirty();
+
+  layoutDebug.group(
+    "created group %s with %d racks, preset: %s",
+    group.id,
+    rackIds.length,
+    actualPreset,
+  );
+
+  return { group };
+}
+
+/**
+ * Update a rack group's properties
+ * @param ctx - Layout state access
+ * @param id - Group ID
+ * @param updates - Properties to update
+ * @returns Error if validation fails
+ */
+export function updateRackGroup(
+  ctx: LayoutStateAccess,
+  id: string,
+  updates: Partial<RackGroup>,
+): { error?: string } {
+  const group = getRackGroupById(ctx, id);
+  if (!group) {
+    return { error: "Group not found" };
+  }
+
+  const layout = ctx.getLayout();
+
+  // Validate all rack IDs in updates exist
+  if (updates.rack_ids) {
+    for (const rackId of updates.rack_ids) {
+      if (!layout.racks.find((r) => r.id === rackId)) {
+        return { error: `Rack "${rackId}" not found` };
+      }
+    }
+  }
+
+  // Validate bayed preset minimum rack count
+  const effectivePreset = updates.layout_preset ?? group.layout_preset;
+  const effectiveRackIds = updates.rack_ids ?? group.rack_ids;
+  if (effectivePreset === "bayed" && effectiveRackIds.length < 2) {
+    return { error: "Bayed groups require at least 2 racks" };
+  }
+
+  // Validate bayed preset height requirement
+  // Check when: (1) switching to bayed, or (2) updating rack_ids on existing bayed group
+  if (
+    effectivePreset === "bayed" &&
+    (updates.layout_preset === "bayed" || updates.rack_ids)
+  ) {
+    const heightError = validateBayedGroupHeights(ctx, effectiveRackIds);
+    if (heightError) {
+      return { error: heightError };
+    }
+  }
+
+  // Capture before state for undo
+  const before: Partial<RackGroup> = {};
+  for (const key of Object.keys(updates) as (keyof RackGroup)[]) {
+    before[key] = group[key] as never;
+  }
+
+  // Use recorded action for undo/redo support
+  const history = ctx.getHistory();
+  const adapter = getRackGroupCommandAdapter(ctx);
+  const command = createUpdateRackGroupCommand(id, before, updates, adapter);
+  history.execute(command);
+  ctx.markDirty();
+
+  layoutDebug.group("updated group %s: %o", id, updates);
+
+  return {};
+}
+
+/**
+ * Delete a rack group
+ * @param ctx - Layout state access
+ * @param id - Group ID to delete
+ */
+export function deleteRackGroup(ctx: LayoutStateAccess, id: string): void {
+  const group = getRackGroupById(ctx, id);
+  if (!group) return;
+
+  // Use recorded action for undo/redo support
+  const history = ctx.getHistory();
+  const adapter = getRackGroupCommandAdapter(ctx);
+  const command = createDeleteRackGroupCommand(group, adapter);
+  history.execute(command);
+  ctx.markDirty();
+
+  layoutDebug.group("deleted group %s", id);
+}
+
+/**
+ * Add a rack to an existing group
+ * @param ctx - Layout state access
+ * @param groupId - Group ID
+ * @param rackId - Rack ID to add
+ * @returns Error if validation fails
+ */
+export function addRackToGroup(
+  ctx: LayoutStateAccess,
+  groupId: string,
+  rackId: string,
+): { error?: string } {
+  const group = getRackGroupById(ctx, groupId);
+  if (!group) {
+    return { error: "Group not found" };
+  }
+
+  // Check rack exists
+  const rack = ctx.findRack(rackId);
+  if (!rack) {
+    return { error: `Rack "${rackId}" not found` };
+  }
+
+  // Check rack not already in group
+  if (group.rack_ids.includes(rackId)) {
+    return { error: "Rack is already in this group" };
+  }
+
+  // Check rack not in ANY other group
+  const existingGroup = getRackGroupForRack(ctx, rackId);
+  if (existingGroup && existingGroup.id !== groupId) {
+    const rackName = rack.name ?? rackId;
+    return {
+      error: `Rack "${rackName}" is already in group "${existingGroup.name ?? existingGroup.id}". Remove it first.`,
+    };
+  }
+
+  // Validate bayed preset height requirement
+  if (group.layout_preset === "bayed") {
+    const existingRack = ctx.findRack(group.rack_ids[0]!);
+    if (existingRack && rack.height !== existingRack.height) {
+      return {
+        error: `Cannot add ${rack.height}U rack to bayed group with ${existingRack.height}U racks`,
+      };
+    }
+  }
+
+  // Update via updateRackGroup for undo/redo support
+  const newRackIds = [...group.rack_ids, rackId];
+  return updateRackGroup(ctx, groupId, { rack_ids: newRackIds });
+}
+
+/**
+ * Remove a rack from a group
+ * @param ctx - Layout state access
+ * @param groupId - Group ID
+ * @param rackId - Rack ID to remove
+ */
+export function removeRackFromGroup(
+  ctx: LayoutStateAccess,
+  groupId: string,
+  rackId: string,
+): void {
+  const group = getRackGroupById(ctx, groupId);
+  if (!group) return;
+
+  const newRackIds = group.rack_ids.filter((id) => id !== rackId);
+
+  // If this was the last rack, delete the group
+  if (newRackIds.length === 0) {
+    deleteRackGroup(ctx, groupId);
+  } else {
+    updateRackGroup(ctx, groupId, { rack_ids: newRackIds });
+  }
+}
+
+/**
+ * Add a new empty bay to a bayed rack group
+ * Creates a new rack with matching height and adds to group
+ * @param ctx - Layout state access
+ * @param groupId - Group ID
+ * @param deleteRackFn - Function to delete a rack (from rack-actions, avoids circular dep)
+ * @returns The new rack ID or error
+ */
+export function addBayToGroup(
+  ctx: LayoutStateAccess,
+  groupId: string,
+): { rackId?: string; error?: string } {
+  const group = getRackGroupById(ctx, groupId);
+  if (!group) {
+    return { error: "Group not found" };
+  }
+
+  if (group.layout_preset !== "bayed") {
+    return { error: "Can only add bays to bayed rack groups" };
+  }
+
+  const layout = ctx.getLayout();
+
+  // Get height from existing rack in group
+  const existingRack = layout.racks.find((r) => r.id === group.rack_ids[0]);
+  if (!existingRack) {
+    return { error: "Group has no existing racks" };
+  }
+
+  // Check capacity
+  if (layout.racks.length >= MAX_RACKS) {
+    return { error: "Maximum rack limit reached" };
+  }
+
+  // Create new rack with matching height, using createDefaultRack for proper field initialization
+  const newRackId = generateRackId();
+  const bayNumber = group.rack_ids.length + 1;
+  // Validate width - default to 19 if the persisted value is unexpected.
+  const validWidths: Rack["width"][] = [10, 19, 21, 23];
+  const width = (
+    validWidths.includes(existingRack.width) ? existingRack.width : 19
+  ) as Rack["width"];
+  const newRack = createDefaultRack(
+    bayRackName(bayNumber),
+    existingRack.height,
+    width,
+    existingRack.form_factor,
+    existingRack.desc_units,
+    existingRack.starting_unit,
+    existingRack.show_rear,
+    newRackId,
+  );
+
+  // Use BatchCommand for atomic undo/redo
+  const history = ctx.getHistory();
+  const rackAdapter = getRackLifecycleCommandAdapter(ctx);
+  const groupAdapter = getRackGroupCommandAdapter(ctx);
+
+  const oldRackIds = [...group.rack_ids];
+  const newRackIds = [...oldRackIds, newRackId];
+
+  const commands: Command[] = [
+    createAddRackCommand(newRack, rackAdapter),
+    createUpdateRackGroupCommand(
+      groupId,
+      { rack_ids: oldRackIds },
+      { rack_ids: newRackIds },
+      groupAdapter,
+    ),
+  ];
+  const batch = createBatchCommand(
+    `Add bay ${bayNumber} to "${group.name}"`,
+    commands,
+  );
+  history.execute(batch);
+  ctx.markDirty();
+
+  layoutDebug.group(
+    "addBayToGroup: added bay %d (rack %s) to group %s",
+    bayNumber,
+    newRackId,
+    groupId,
+  );
+
+  return { rackId: newRackId };
+}
+
+/**
+ * Remove the last bay from a bayed rack group
+ * @param ctx - Layout state access
+ * @param groupId - Group ID
+ * @param deleteRackFn - Function to delete a rack (injected to avoid circular dep)
+ * @returns Error if bay has devices or group would have < 2 bays
+ */
+export function removeBayFromGroup(
+  ctx: LayoutStateAccess,
+  groupId: string,
+  deleteRackFn: (id: string) => void,
+): { error?: string } {
+  const group = getRackGroupById(ctx, groupId);
+  if (!group) {
+    layoutDebug.group("removeBayFromGroup: group %s not found", groupId);
+    return { error: "Group not found" };
+  }
+
+  if (group.rack_ids.length <= 2) {
+    layoutDebug.group(
+      "removeBayFromGroup: group %s has only %d bays, cannot remove",
+      groupId,
+      group.rack_ids.length,
+    );
+    return { error: "Bayed racks must have at least 2 bays" };
+  }
+
+  // Get the last rack
+  const lastRackId = group.rack_ids[group.rack_ids.length - 1];
+  if (!lastRackId) {
+    return { error: "Group has no racks" };
+  }
+  const lastRack = ctx.findRack(lastRackId);
+
+  if (lastRack && lastRack.devices.length > 0) {
+    layoutDebug.group(
+      "removeBayFromGroup: bay %d has %d devices, cannot remove",
+      group.rack_ids.length,
+      lastRack.devices.length,
+    );
+    return {
+      error: `Bay ${group.rack_ids.length} contains ${lastRack.devices.length} device(s). Remove them first.`,
+    };
+  }
+
+  const bayNumber = group.rack_ids.length;
+
+  layoutDebug.group(
+    "removeBayFromGroup: removing bay %d (rack %s) from group %s",
+    bayNumber,
+    lastRackId,
+    groupId,
+  );
+
+  // Delete the rack using the command pattern for proper undo/redo support.
+  // deleteRack handles both rack deletion and group membership cleanup atomically.
+  deleteRackFn(lastRackId);
+
+  layoutDebug.group(
+    "removeBayFromGroup: successfully removed bay %d (rack %s) from group %s",
+    bayNumber,
+    lastRackId,
+    groupId,
+  );
+
+  return {};
+}
+
+/**
+ * Set the bay count for a bayed rack group.
+ *
+ * Performs full upfront validation, then builds all rack and group mutations
+ * as a single BatchCommand for atomic undo/redo.
+ *
+ * @param ctx - Layout state access
+ * @param groupId - Group ID
+ * @param targetCount - Desired bay count (must be >= 2)
+ * @param deleteRackFn - Function to delete a rack (injected to avoid circular dep; unused in batch path)
+ * @returns Error if validation fails
+ */
+export function setBayCount(
+  ctx: LayoutStateAccess,
+  groupId: string,
+  targetCount: number,
+  _deleteRackFn: (id: string) => void,
+): { error?: string } {
+  const group = getRackGroupById(ctx, groupId);
+  if (!group) {
+    return { error: "Group not found" };
+  }
+
+  if (group.layout_preset !== "bayed") {
+    return { error: "Can only modify bay count for bayed rack groups" };
+  }
+
+  if (targetCount < 2) {
+    return { error: "Bayed racks must have at least 2 bays" };
+  }
+
+  const currentCount = group.rack_ids.length;
+  if (targetCount === currentCount) {
+    return {}; // No change needed
+  }
+
+  const layout = ctx.getLayout();
+
+  // Validate upfront before making any changes
+  if (targetCount > currentCount) {
+    const baysToAdd = targetCount - currentCount;
+    if (layout.racks.length + baysToAdd > MAX_RACKS) {
+      return { error: "Maximum rack limit would be exceeded" };
+    }
+  } else {
+    for (let i = currentCount - 1; i >= targetCount; i--) {
+      const rackId = group.rack_ids[i];
+      const rack = layout.racks.find((r) => r.id === rackId);
+      if (rack && rack.devices.length > 0) {
+        return {
+          error: `Bay ${i + 1} contains ${rack.devices.length} device(s). Remove them first.`,
+        };
+      }
+    }
+  }
+
+  // Build all mutations as a single BatchCommand
+  const history = ctx.getHistory();
+  const rackAdapter = getRackLifecycleCommandAdapter(ctx);
+  const groupAdapter = getRackGroupCommandAdapter(ctx);
+  const oldRackIds = [...group.rack_ids];
+  const commands: Command[] = [];
+
+  if (targetCount > currentCount) {
+    // Adding bays — create racks, then update group with all new IDs
+    const existingRack = layout.racks.find((r) => r.id === group.rack_ids[0]);
+    if (!existingRack) {
+      return { error: "Group has no existing racks" };
+    }
+
+    const validWidths: Rack["width"][] = [10, 19, 21, 23];
+    const width = (
+      validWidths.includes(existingRack.width) ? existingRack.width : 19
+    ) as Rack["width"];
+
+    const newRackIds: string[] = [];
+    for (let i = currentCount; i < targetCount; i++) {
+      const newRackId = generateRackId();
+      const bayNumber = i + 1;
+      const newRack = createDefaultRack(
+        bayRackName(bayNumber),
+        existingRack.height,
+        width,
+        existingRack.form_factor,
+        existingRack.desc_units,
+        existingRack.starting_unit,
+        existingRack.show_rear,
+        newRackId,
+      );
+      commands.push(createAddRackCommand(newRack, rackAdapter));
+      newRackIds.push(newRackId);
+    }
+
+    commands.push(
+      createUpdateRackGroupCommand(
+        groupId,
+        { rack_ids: oldRackIds },
+        { rack_ids: [...oldRackIds, ...newRackIds] },
+        groupAdapter,
+      ),
+    );
+  } else {
+    // Removing bays — update group first (so rack_ids shrinks), then delete racks
+    const rackIdsToKeep = oldRackIds.slice(0, targetCount);
+    const rackIdsToRemove = oldRackIds.slice(targetCount);
+
+    commands.push(
+      createUpdateRackGroupCommand(
+        groupId,
+        { rack_ids: oldRackIds },
+        { rack_ids: rackIdsToKeep },
+        groupAdapter,
+      ),
+    );
+
+    // Delete racks that are being removed (reverse order for cleaner undo)
+    for (const rackId of rackIdsToRemove.reverse()) {
+      const rack = layout.racks.find((r) => r.id === rackId);
+      if (rack) {
+        commands.push(createDeleteRackCommand(rack, [], rackAdapter));
+      }
+    }
+  }
+
+  const batch = createBatchCommand(`Set bay count to ${targetCount}`, commands);
+  history.execute(batch);
+  ctx.markDirty();
+
+  return {};
+}
+
+/**
+ * Reorder racks within a group by providing a new order of rack IDs.
+ * This changes the bay numbering for bayed view rendering.
+ * Uses undo/redo system for reverting the operation.
+ *
+ * @param ctx - Layout state access
+ * @param groupId - Group ID to reorder
+ * @param newOrder - New order of rack IDs (must contain same racks, just reordered)
+ * @returns Error if validation fails
+ */
+export function reorderRacksInGroup(
+  ctx: LayoutStateAccess,
+  groupId: string,
+  newOrder: string[],
+): { error?: string } {
+  const group = getRackGroupById(ctx, groupId);
+  if (!group) {
+    return { error: "Group not found" };
+  }
+
+  layoutDebug.group(
+    "reordering racks in group %s: %o -> %o",
+    groupId,
+    group.rack_ids,
+    newOrder,
+  );
+
+  // Validate same racks, just reordered
+  const currentSet = new Set(group.rack_ids);
+  const newSet = new Set(newOrder);
+  if (
+    currentSet.size !== newSet.size ||
+    ![...currentSet].every((id) => newSet.has(id))
+  ) {
+    return { error: "New order must contain same racks" };
+  }
+
+  // Check for duplicates in newOrder
+  if (newOrder.length !== newSet.size) {
+    return { error: "New order contains duplicate rack IDs" };
+  }
+
+  // No change needed if order is the same
+  if (JSON.stringify(group.rack_ids) === JSON.stringify(newOrder)) {
+    layoutDebug.group(
+      "reorder skipped - order unchanged for group %s",
+      groupId,
+    );
+    return {};
+  }
+
+  // Use updateRackGroup which already has undo/redo support
+  return updateRackGroup(ctx, groupId, { rack_ids: newOrder });
+}
+
+// =============================================================================
+// Baying — create and extend a bay (#2740)
+// =============================================================================
+
+/** Result of createBayedRack: the new rack and bay group ids, or an error. */
+export interface CreateBayedRackResult {
+  rackId?: string;
+  groupId?: string;
+  error?: string;
+}
+
+/**
+ * Build the recorded position-update commands that reindex a row after a
+ * position-changing insert (a bayed insert or a rack duplicate placed
+ * adjacent to its source, #3003). The new rack carries its position from
+ * creation and is not yet in the layout, so it is skipped; existing racks
+ * already at their target position are left untouched so the batch stays
+ * minimal. Exported for reuse by duplicateRack (rack-actions.ts).
+ */
+export function buildRowReindexCommands(
+  ctx: LayoutStateAccess,
+  assignments: RackPositionAssignment[],
+): Command[] {
+  const adapter = getCommandStoreAdapter(ctx);
+  const commands: Command[] = [];
+  for (const { id, position } of assignments) {
+    const rack = ctx.findRack(id);
+    if (!rack || rack.position === position) continue;
+    commands.push(
+      bindCommandToRack(
+        ctx,
+        id,
+        createUpdateRackCommand(
+          { position: rack.position },
+          { position },
+          adapter,
+        ),
+      ),
+    );
+  }
+  return commands;
+}
+
+/**
+ * Create a new bayed rack flush to the right of a source rack.
+ *
+ * When the source is standalone, a new bayed group is formed from
+ * [source, new]; when it already belongs to a bayed group, that group is
+ * extended with the new member woven in right after the source. The new rack is
+ * fully uniform with the source (width, form factor, height, and U-numbering
+ * inherited), and the row is reindexed so a mid-row insert pushes the racks to
+ * its right along without collisions. Baying never merges existing racks, so a
+ * source already in a row (non-bayed) group is refused.
+ *
+ * The whole operation is one BatchCommand: a single undo reverts the new rack,
+ * the group change, and the position reindex together.
+ *
+ * @param ctx - Layout state access
+ * @param sourceRackId - The rack to bay from (a selected bay member when extending)
+ * @returns The new rack and group ids, or an error
+ */
+export function createBayedRack(
+  ctx: LayoutStateAccess,
+  sourceRackId: string,
+): CreateBayedRackResult {
+  const layout = ctx.getLayout();
+  const sourceRack = layout.racks.find((r) => r.id === sourceRackId);
+  if (!sourceRack) {
+    return { error: "Source rack not found" };
+  }
+
+  if (layout.racks.length >= MAX_RACKS) {
+    return { error: "Maximum rack limit reached" };
+  }
+
+  const existingGroup = getRackGroupForRack(ctx, sourceRackId);
+  if (existingGroup && existingGroup.layout_preset !== "bayed") {
+    return { error: "Cannot bay a rack that is already in a row group" };
+  }
+
+  const newRackId = generateRackId();
+  const assignments = planBayedInsert(
+    layout.racks,
+    layout.rack_groups ?? [],
+    sourceRackId,
+    newRackId,
+  );
+  if (!assignments) {
+    return { error: "Source rack is not in the row" };
+  }
+  const newPosition =
+    assignments.find((a) => a.id === newRackId)?.position ??
+    layout.racks.length;
+
+  // Inherit the uniform fields from the source. width is re-validated because a
+  // persisted layout could carry an unexpected value.
+  const validWidths: Rack["width"][] = [10, 19, 21, 23];
+  const width = (
+    validWidths.includes(sourceRack.width) ? sourceRack.width : 19
+  ) as Rack["width"];
+  const bayNumber = (existingGroup ? existingGroup.rack_ids.length : 1) + 1;
+  const newRack = createDefaultRack(
+    bayRackName(bayNumber),
+    sourceRack.height,
+    width,
+    sourceRack.form_factor,
+    sourceRack.desc_units,
+    sourceRack.starting_unit,
+    sourceRack.show_rear,
+    newRackId,
+  );
+  newRack.position = newPosition;
+
+  const history = ctx.getHistory();
+  const rackAdapter = getRackLifecycleCommandAdapter(ctx);
+  const groupAdapter = getRackGroupCommandAdapter(ctx);
+
+  const commands: Command[] = [createAddRackCommand(newRack, rackAdapter)];
+  commands.push(...buildRowReindexCommands(ctx, assignments));
+
+  let groupId: string;
+  if (existingGroup) {
+    groupId = existingGroup.id;
+    const sourceIdx = existingGroup.rack_ids.indexOf(sourceRackId);
+    const insertAt =
+      sourceIdx === -1 ? existingGroup.rack_ids.length : sourceIdx + 1;
+    const newRackIds = [...existingGroup.rack_ids];
+    newRackIds.splice(insertAt, 0, newRackId);
+    commands.push(
+      createUpdateRackGroupCommand(
+        groupId,
+        { rack_ids: [...existingGroup.rack_ids] },
+        { rack_ids: newRackIds },
+        groupAdapter,
+      ),
+    );
+  } else {
+    const group: RackGroup = {
+      id: generateGroupId(),
+      rack_ids: [sourceRackId, newRackId],
+      layout_preset: "bayed",
+    };
+    groupId = group.id;
+    commands.push(createCreateRackGroupCommand(group, groupAdapter));
+  }
+
+  const batch = createBatchCommand(
+    existingGroup ? "Extend bay" : "Create bay",
+    commands,
+  );
+  history.execute(batch);
+  ctx.markDirty();
+  ctx.markStarted();
+
+  layoutDebug.group(
+    "createBayedRack: %s rack %s into group %s (position %d)",
+    existingGroup ? "extended" : "formed",
+    newRackId,
+    groupId,
+    newPosition,
+  );
+
+  return { rackId: newRackId, groupId };
+}
+
+/**
+ * Resize every rack in a bayed group to the same height as one recorded step.
+ *
+ * The bay's equal-height invariant is preserved by construction (all members
+ * are set to newHeight together), and one undo reverts the whole resize. The
+ * caller is responsible for clamping newHeight to a value that fits every
+ * member's devices (the canvas drag does this via getMinResizeHeight).
+ *
+ * @param ctx - Layout state access
+ * @param groupId - The bayed group to resize
+ * @param newHeight - The shared new height in whole U
+ * @param updateRacksBatchRecordedFn - Recorded batch update (undo/redo)
+ */
+export function resizeBayedGroupHeight(
+  ctx: LayoutStateAccess,
+  groupId: string,
+  newHeight: number,
+  updateRacksBatchRecordedFn: UpdateRacksBatchRecordedFn,
+): { error?: string } {
+  const group = getRackGroupById(ctx, groupId);
+  if (!group) {
+    return { error: "Group not found" };
+  }
+  if (group.layout_preset !== "bayed") {
+    return { error: "Can only resize bayed rack groups" };
+  }
+
+  updateRacksBatchRecordedFn(
+    group.rack_ids.map((rackId) => ({
+      rackId,
+      updates: { height: newHeight },
+    })),
+    "Resize bay",
+  );
+  return {};
+}
+
+/**
+ * Remove a rack from its bayed group and close the row.
+ *
+ * The rack is deleted and its id dropped from the group. When that leaves the
+ * group with fewer than two members, the group is dissolved so the lone
+ * remaining rack becomes standalone: a one-member bay is never left behind. The
+ * remaining racks reindex so the row closes the gap. The whole operation is one
+ * BatchCommand, so a single undo restores the rack, its group membership, and
+ * the row positions together.
+ *
+ * Confirmation when the rack holds gear is the caller's concern; this action
+ * deletes unconditionally.
+ *
+ * @param ctx - Layout state access
+ * @param rackId - The bay member to remove
+ * @returns Error when the rack is missing or not in a bayed group
+ */
+export function removeRackFromBay(
+  ctx: LayoutStateAccess,
+  rackId: string,
+): { error?: string } {
+  const layout = ctx.getLayout();
+  const rack = layout.racks.find((r) => r.id === rackId);
+  if (!rack) {
+    return { error: "Rack not found" };
+  }
+
+  const group = getRackGroupForRack(ctx, rackId);
+  if (!group || group.layout_preset !== "bayed") {
+    return { error: "Rack is not in a bayed group" };
+  }
+
+  const remainingIds = group.rack_ids.filter((id) => id !== rackId);
+
+  const history = ctx.getHistory();
+  const rackAdapter = getRackLifecycleCommandAdapter(ctx);
+  const groupAdapter = getRackGroupCommandAdapter(ctx);
+
+  const commands: Command[] = [];
+
+  // 1. Update or dissolve the group first. Dissolve when fewer than two members
+  //    remain so the lone survivor becomes standalone instead of a 1-member bay.
+  if (remainingIds.length >= 2) {
+    commands.push(
+      createUpdateRackGroupCommand(
+        group.id,
+        { rack_ids: [...group.rack_ids] },
+        { rack_ids: remainingIds },
+        groupAdapter,
+      ),
+    );
+  } else {
+    commands.push(createDeleteRackGroupCommand(group, groupAdapter));
+  }
+
+  // 2. Reindex the remaining racks so the row closes the gap.
+  const assignments = planRowAfterRemoval(
+    layout.racks,
+    layout.rack_groups ?? [],
+    [rackId],
+  );
+  if (assignments) {
+    commands.push(...buildRowReindexCommands(ctx, assignments));
+  }
+
+  // 3. Delete the rack itself. Group membership is already handled above, so no
+  //    affected groups are passed: undo restores the rack alone and the group
+  //    command restores its membership.
+  commands.push(createDeleteRackCommand(rack, [], rackAdapter));
+
+  // Deleting the rack destroys its devices' ports, so remove the connections
+  // that reference them in the same undo step (#3122, same pattern as #639).
+  const connectionAdapter = getCommandStoreAdapter(ctx);
+  const connectionCommands: Command[] = findConnectionsForDevices(
+    ctx,
+    rack.devices.map((device) => ({ rackId, device })),
+  ).map((connection) =>
+    createRemoveConnectionCommand(
+      connection,
+      connectionAdapter,
+      `Remove connection ${connection.label ?? connection.id}`,
+    ),
+  );
+
+  const batch = createBatchCommand("Remove rack from bay", [
+    ...connectionCommands,
+    ...commands,
+  ]);
+  history.execute(batch);
+  ctx.markDirty();
+
+  layoutDebug.group(
+    "removeRackFromBay: removed rack %s from group %s (%d members remain)",
+    rackId,
+    group.id,
+    remainingIds.length,
+  );
+
+  return {};
+}
+
+/**
+ * Delete an entire bayed rack group: every member rack and the group itself,
+ * as one BatchCommand so a single undo restores the whole group intact.
+ *
+ * The group-delete command runs first, then each member's delete command
+ * (with no affected-groups snapshot of its own, since group membership is
+ * already handled by the group command), mirroring removeRackFromBay's
+ * "handle the group first" ordering. This keeps the transaction from ever
+ * passing through a "bayed" group holding fewer than two members: forward,
+ * the group is gone before any member is deleted; on undo (reverse order),
+ * every member is restored before the group command recreates it.
+ *
+ * The previous call site looped the plain deleteRack() once per member,
+ * pushing one history command per rack -- a single undo only reverted the
+ * last-deleted member, and the loop itself left the group at exactly one
+ * rack_id mid-loop, violating the >=2-bays invariant removeBayFromGroup
+ * enforces (#2994 fold-in review).
+ *
+ * Confirmation is the caller's concern (EditPanelRack's "Delete Bayed Rack"
+ * button routes through the shared confirmDelete dialog); this deletes
+ * unconditionally.
+ *
+ * @param ctx - Layout state access
+ * @param groupId - The bayed group to delete entirely
+ * @returns Error when the group is missing or not bayed
+ */
+export function deleteBayedGroup(
+  ctx: LayoutStateAccess,
+  groupId: string,
+): { error?: string } {
+  const group = getRackGroupById(ctx, groupId);
+  if (!group) {
+    return { error: "Group not found" };
+  }
+  if (group.layout_preset !== "bayed") {
+    return { error: "Can only delete a whole bayed rack group" };
+  }
+
+  const layout = ctx.getLayout();
+  const history = ctx.getHistory();
+  const rackAdapter = getRackLifecycleCommandAdapter(ctx);
+  const groupAdapter = getRackGroupCommandAdapter(ctx);
+
+  const commands: Command[] = [
+    createDeleteRackGroupCommand(group, groupAdapter),
+  ];
+
+  // Reindex the remaining racks so the row closes the gap left by every
+  // group member at once, mirroring removeRackFromBay's "handle the group
+  // first, then reindex" ordering. Without this, a group positioned before
+  // other racks left their persisted row positions unchanged on delete
+  // (#2994 CodeRabbit follow-up).
+  const assignments = planRowAfterRemoval(
+    layout.racks,
+    layout.rack_groups ?? [],
+    group.rack_ids,
+  );
+  if (assignments) {
+    commands.push(...buildRowReindexCommands(ctx, assignments));
+  }
+
+  // Group membership is handled by the command above, so no affected groups
+  // are passed to each rack's delete command: undo restores each rack alone,
+  // and the group command recreates the group -- with its original rack_ids
+  // -- once every rack is back.
+  for (const rackId of group.rack_ids) {
+    const rack = layout.racks.find((r) => r.id === rackId);
+    if (rack) {
+      commands.push(createDeleteRackCommand(rack, [], rackAdapter));
+    }
+  }
+
+  // Deleting the member racks destroys their devices' ports, so remove the
+  // connections that reference them in the same undo step (#3122, same
+  // pattern as #639). One lookup across every member removes a connection
+  // between two members once.
+  const connectionAdapter = getCommandStoreAdapter(ctx);
+  const connectionCommands: Command[] = findConnectionsForDevices(
+    ctx,
+    layout.racks
+      .filter((r) => group.rack_ids.includes(r.id))
+      .flatMap((r) => r.devices.map((device) => ({ rackId: r.id, device }))),
+  ).map((connection) =>
+    createRemoveConnectionCommand(
+      connection,
+      connectionAdapter,
+      `Remove connection ${connection.label ?? connection.id}`,
+    ),
+  );
+
+  const batch = createBatchCommand(
+    `Delete bayed group "${group.name ?? "Bayed Rack"}"`,
+    [...connectionCommands, ...commands],
+  );
+  history.execute(batch);
+  ctx.markDirty();
+
+  layoutDebug.group(
+    "deleteBayedGroup: deleted group %s and %d member racks",
+    groupId,
+    group.rack_ids.length,
+  );
+
+  return {};
+}

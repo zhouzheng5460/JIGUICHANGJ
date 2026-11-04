@@ -1,0 +1,103 @@
+name: Issue Labeler
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  label-size:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Apply size label from dropdown
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+
+            // Size label mapping from implementation-task dropdown
+            const sizeLabels = {
+              'small (<1 hour)': 'size:small',
+              'medium (1-4 hours)': 'size:medium',
+              'large (needs breakdown)': 'size:large'
+            };
+
+            // Find size selection in issue body
+            // The dropdown renders as "### Size Estimate\n\nsmall (<1 hour)" format
+            const sizeMatch = body.match(/### Size Estimate\s*\n\n(small \(<1 hour\)|medium \(1-4 hours\)|large \(needs breakdown\))/i);
+
+            if (sizeMatch) {
+              const selectedSize = sizeMatch[1];
+              const newLabel = sizeLabels[selectedSize];
+
+              if (newLabel) {
+                // Get current labels
+                const currentLabels = issue.labels.map(l => l.name);
+
+                // Remove any existing size labels
+                const sizeLabelsToRemove = currentLabels.filter(l => l.startsWith('size:'));
+
+                // Only update if label changed
+                if (!currentLabels.includes(newLabel) || sizeLabelsToRemove.length > 1) {
+                  // Remove old size labels
+                  for (const label of sizeLabelsToRemove) {
+                    if (label !== newLabel) {
+                      await github.rest.issues.removeLabel({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        issue_number: issue.number,
+                        name: label
+                      }).catch(() => {}); // Ignore if label doesn't exist
+                    }
+                  }
+
+                  // Add new size label
+                  if (!currentLabels.includes(newLabel)) {
+                    await github.rest.issues.addLabels({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issue.number,
+                      labels: [newLabel]
+                    });
+                    console.log(`Applied label: ${newLabel}`);
+                  }
+                }
+              }
+            }
+
+  label-type:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Apply type label from template
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+            const labels = issue.labels.map(l => l.name);
+
+            // Map template markers to type labels
+            // Templates set their own labels, but we reinforce and fill gaps
+            const typeMap = [
+              // Spike template doesn't set a type label — only sets 'triage'
+              { match: /### Research Question/i, label: 'spike', unless: ['spike'] },
+              // Implementation task — ensure 'chore' if no type present
+              { match: /### Acceptance Criteria/i, label: 'chore', unless: ['bug', 'feature', 'chore', 'spike', 'ci', 'documentation', 'design', 'performance', 'security'] },
+            ];
+
+            for (const { match, label, unless } of typeMap) {
+              if (match.test(body) && !unless.some(l => labels.includes(l))) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: [label]
+                });
+                console.log(`Applied type label: ${label}`);
+                break; // Only apply one type label
+              }
+            }

@@ -1,0 +1,945 @@
+import { Hono, type Context, type Env } from "hono";
+import { cors } from "hono/cors";
+import { logger as honoLogger } from "hono/logger";
+import { bodyLimit } from "hono/body-limit";
+import layouts, {
+  UPDATED_AT_HEADER,
+  PRE_CARRIER_MIGRATION_HEADER,
+} from "./routes/layouts";
+import assets from "./routes/assets";
+import {
+  createSignedAuthSessionToken,
+  createAuthSessionCookieHeader,
+  createAuthGateMiddleware,
+  createCsrfProtectionMiddleware,
+  createExpiredAuthSessionCookieHeader,
+  createOriginPolicyMiddleware,
+  createRefreshedAuthSessionCookieHeader,
+  createWriteAuthMiddleware,
+  createRateLimitMiddleware,
+  createStorageQuotaMiddleware,
+  resolveClientIpFromHeaders,
+  resolvePeerAddress,
+  invalidateAuthSession,
+  resolveAuthenticatedSessionClaims,
+  resolveApiSecurityConfig,
+  verifySignedAuthSessionToken,
+  type AuthSessionClaims,
+  type EnvMap,
+} from "./security";
+import { createAuthHandler } from "./middleware/auth";
+import { createAuth } from "./auth/config";
+import { createRequireAdminMiddleware } from "./authorization";
+import { configureAuthLogHashKey, safeLogAuthEvent } from "./auth-logger";
+// Named import (not the whole package.json object) so the bundler inlines only
+// the version string. Inlining the full object would embed the dependency list,
+// including the literal "@node-rs/argon2", into the Worker bundle (#2626).
+import { version as pkgVersion } from "../package.json";
+import { logger } from "./logger";
+import type { StorageDriver, StorageVariables } from "./storage/driver";
+
+const DEFAULT_MAX_ASSET_SIZE = 5 * 1024 * 1024; // 5MB
+const DEFAULT_MAX_LAYOUT_SIZE = 1 * 1024 * 1024; // 1MB
+const OIDC_PROVIDER_ID = "oidc";
+const HEALTH_RESPONSE = {
+  ok: true,
+  status: "ok",
+  service: "rackula-persistence-api",
+  version: 1,
+} as const;
+
+export interface VersionInfo {
+  /** Release version (e.g. "0.9.5"), used for cross-image version-alignment checks. */
+  version: string;
+  /** Short git commit hash the image was built from, or "" when not injected. */
+  commit: string;
+  /** ISO 8601 build timestamp, or "" when not injected. */
+  buildTime: string;
+}
+
+/**
+ * Resolve the app version reported by `/version`.
+ *
+ * The deployed version is injected at build time via the `APP_VERSION` build
+ * arg (sourced from the release tag — the single source of truth). When unset,
+ * as in local development, it falls back to `api/package.json`'s version.
+ *
+ * @param env - Environment map (defaults to `process.env`).
+ * @returns Version metadata served unauthenticated at `/version` and `/api/version`.
+ */
+export function resolveVersionInfo(env: EnvMap = process.env): VersionInfo {
+  return {
+    version: env.APP_VERSION?.trim() || pkgVersion,
+    commit: env.APP_COMMIT?.trim() || "",
+    buildTime: env.APP_BUILD_TIME?.trim() || "",
+  };
+}
+
+type AppEnv = {
+  Variables: StorageVariables & {
+    authSubject: string;
+    authClaims: AuthSessionClaims | undefined;
+  };
+};
+
+/** Optional dependency overrides for {@link createApp}. */
+export interface CreateAppDeps {
+  /** Storage backend; defaults to the filesystem driver (self-host / Bun). */
+  storage?: StorageDriver;
+}
+
+type BetterAuthSessionLike = {
+  session: {
+    id?: string;
+    createdAt?: Date | string | number;
+    expiresAt?: Date | string | number;
+  };
+  user: {
+    id?: string | null;
+    email?: string | null;
+  };
+};
+
+type BetterAuthSessionApiResult = {
+  headers?: Headers;
+  response?: BetterAuthSessionLike | null;
+};
+
+/**
+ * Sanitise a `next` redirect path from a query parameter into a safe relative path.
+ *
+ * Rejects absolute URLs, protocol-relative URLs (`//`), and paths containing
+ * control characters (`\r`, `\n`, `\0`) to prevent open-redirect and CRLF
+ * injection attacks. Falls back to `"/"` for any invalid input.
+ *
+ * @param next - Raw query-parameter value; may be `undefined` or any string.
+ * @returns A root-relative path starting with `"/"`, safe for use in redirects.
+ */
+export function normalizeNextPath(next: string | undefined): string {
+  if (!next) {
+    return "/";
+  }
+
+  const trimmed = next.trim();
+  if (!trimmed.startsWith("/")) {
+    return "/";
+  }
+
+  if (/[\r\n\0]/.test(trimmed)) {
+    return "/";
+  }
+
+  if (trimmed.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+    return "/";
+  }
+
+  return trimmed;
+}
+
+function readSetCookieHeaders(headers: Headers | undefined): string[] {
+  if (!headers) {
+    return [];
+  }
+
+  const withGetSetCookie = headers as Headers & {
+    getSetCookie?: () => string[];
+  };
+  if (typeof withGetSetCookie.getSetCookie === "function") {
+    return withGetSetCookie.getSetCookie();
+  }
+
+  const rawSetCookie = headers.get("set-cookie");
+  return rawSetCookie ? [rawSetCookie] : [];
+}
+
+function appendSetCookieHeaders(
+  c: Context,
+  headers: Headers | undefined,
+): void {
+  for (const setCookieHeader of readSetCookieHeaders(headers)) {
+    c.header("Set-Cookie", setCookieHeader, { append: true });
+  }
+}
+
+function toEpochSeconds(
+  value: Date | string | number | undefined,
+): number | null {
+  if (value instanceof Date) {
+    const epochSeconds = Math.floor(value.getTime() / 1000);
+    return Number.isFinite(epochSeconds) ? epochSeconds : null;
+  }
+
+  if (typeof value === "string") {
+    const epochSeconds = Math.floor(new Date(value).getTime() / 1000);
+    return Number.isFinite(epochSeconds) ? epochSeconds : null;
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    // Handle millisecond timestamps (common for JS Date.getTime()) as well as second timestamps.
+    const seconds = value > 1e11 ? Math.floor(value / 1000) : Math.floor(value);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+
+  return null;
+}
+
+function mapFallbackSessionClaims(
+  session: BetterAuthSessionLike,
+  authSessionConfig: {
+    authSessionGeneration: number;
+    authSessionIdleTimeoutSeconds: number;
+  },
+): AuthSessionClaims | null {
+  const sessionId = session.session.id?.trim();
+  if (!sessionId) {
+    return null;
+  }
+
+  const issuedAt = toEpochSeconds(session.session.createdAt);
+  const expiresAt = toEpochSeconds(session.session.expiresAt);
+  if (!issuedAt || !expiresAt || expiresAt <= issuedAt) {
+    return null;
+  }
+
+  // Use persisted creation metadata as fallback idle-timeout source of truth.
+  // Do not derive idle expiry from request-time "now", which permits silent extension.
+  const idleExpiresAt = Math.min(
+    expiresAt,
+    issuedAt + authSessionConfig.authSessionIdleTimeoutSeconds,
+  );
+  if (idleExpiresAt <= issuedAt) {
+    return null;
+  }
+
+  const fallbackSubject =
+    session.user.email?.trim() || session.user.id?.trim() || "oidc-user";
+  if (fallbackSubject === "oidc-user") {
+    logger.warn(
+      "auth: OIDC session missing user identity (email and id), using generic subject",
+    );
+  }
+  // MVP: all authenticated users get admin role. Role-based access control
+  // (viewer, editor) will be added when RACKULA_OIDC_ROLE_CLAIM is implemented.
+  return {
+    sub: fallbackSubject,
+    sid: sessionId,
+    iat: issuedAt,
+    exp: expiresAt,
+    idleExp: idleExpiresAt,
+    generation: authSessionConfig.authSessionGeneration,
+    role: "admin",
+  };
+}
+
+function validateFallbackSessionClaims(
+  claims: AuthSessionClaims,
+  authSessionConfig: {
+    authSessionSecret?: string;
+    authSessionGeneration: number;
+    authSessionMaxAgeSeconds: number;
+    authSessionIdleTimeoutSeconds: number;
+  },
+): AuthSessionClaims | null {
+  if (!authSessionConfig.authSessionSecret) {
+    return null;
+  }
+
+  try {
+    const token = createSignedAuthSessionToken(
+      claims,
+      authSessionConfig.authSessionSecret,
+      {
+        sessionGeneration: authSessionConfig.authSessionGeneration,
+        sessionMaxAgeSeconds: authSessionConfig.authSessionMaxAgeSeconds,
+        sessionIdleTimeoutSeconds:
+          authSessionConfig.authSessionIdleTimeoutSeconds,
+      },
+    );
+
+    return verifySignedAuthSessionToken(
+      token,
+      authSessionConfig.authSessionSecret,
+      {
+        expectedGeneration: authSessionConfig.authSessionGeneration,
+        maxSessionMaxAgeSeconds: authSessionConfig.authSessionMaxAgeSeconds,
+      },
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Create and configure the Hono application with all middleware and routes.
+ *
+ * Bootstraps auth credentials (when AUTH_MODE=local), configures CORS, CSRF,
+ * auth gate, rate limiting, and mounts layout/asset routes.
+ *
+ * @param env - Environment variable map (defaults to `process.env`).
+ * @returns Fully configured Hono application instance.
+ * @throws If required environment variables are missing or invalid during bootstrap.
+ */
+export async function createApp(
+  env: EnvMap = process.env,
+  deps: CreateAppDeps = {},
+): Promise<Hono<AppEnv>> {
+  const app = new Hono<AppEnv>();
+
+  // Storage driver seam (#2624): resolve the backend once and inject it per
+  // request. Defaults to the filesystem driver (self-host / Bun); the Workers
+  // entry (#2626) passes an R2-backed driver instead. Route handlers read it
+  // from the context rather than importing the filesystem free functions.
+  //
+  // The filesystem driver pulls in `node:fs`, so it is loaded via dynamic
+  // import only when no driver is injected. The Workers entry always injects
+  // `deps.storage`, so the filesystem chunk never enters the Worker bundle.
+  const storage =
+    deps.storage ??
+    (await import("./storage/filesystem-driver")).createFilesystemDriver();
+  app.use("*", async (c, next) => {
+    c.set("storage", storage);
+    await next();
+  });
+
+  const securityConfig = resolveApiSecurityConfig(env);
+  configureAuthLogHashKey(securityConfig.authLogHashKey);
+
+  // Local auth (argon2 password hashing) is loaded via dynamic import so the
+  // `@node-rs/argon2` native addon never enters the Workers bundle, which only
+  // ever runs with AUTH_MODE=none. The module is loaded once here and reused by
+  // the local-login route block below.
+  const localAuth =
+    securityConfig.authMode === "local" ? await import("./local-auth") : null;
+
+  // Bootstrap local credentials when auth mode is local
+  if (localAuth) {
+    const localCreds = await localAuth.bootstrapLocalCredentials(env);
+    securityConfig.localCredentials = localCreds;
+    // Scrub plaintext password from environment after hashing
+    delete env.RACKULA_LOCAL_PASSWORD;
+    // Insecure cookies in production are refused at config resolution
+    // (resolveApiSecurityConfig), not just warned about, so no check is
+    // needed here (#2942).
+  }
+
+  if (securityConfig.isProduction && securityConfig.allowInsecureCors) {
+    logger.warn(
+      "⚠ Running with wildcard CORS in production because ALLOW_INSECURE_CORS=true.",
+    );
+  }
+
+  if (securityConfig.isProduction && !securityConfig.writeAuthToken) {
+    logger.warn(
+      "⚠ Write-route auth token is not configured. Set RACKULA_API_WRITE_TOKEN to protect PUT/DELETE routes.",
+    );
+  }
+
+  if (securityConfig.authEnabled) {
+    logger.warn(
+      `🔒 Authentication gate enabled (mode=${securityConfig.authMode}). Anonymous access is blocked by default.`,
+    );
+  }
+
+  app.use("*", honoLogger());
+  app.use(
+    "*",
+    cors({
+      origin: securityConfig.corsOrigin,
+      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowHeaders: [
+        "Content-Type",
+        "Authorization",
+        UPDATED_AT_HEADER,
+        PRE_CARRIER_MIGRATION_HEADER,
+      ],
+      exposeHeaders: [UPDATED_AT_HEADER],
+    }),
+  );
+
+  // Rate limiting — after CORS (so preflight is handled), before auth gate
+  // (so abusive requests are rejected before expensive auth checks).
+  if (securityConfig.rateLimitEnabled) {
+    const maxWindowMs = Math.max(
+      securityConfig.rateLimitWriteWindowMs,
+      securityConfig.rateLimitReadWindowMs,
+    );
+    const rateLimitMiddleware = createRateLimitMiddleware({
+      writeMaxRequests: securityConfig.rateLimitWriteMaxRequests,
+      writeWindowMs: securityConfig.rateLimitWriteWindowMs,
+      readMaxRequests: securityConfig.rateLimitReadMaxRequests,
+      readWindowMs: securityConfig.rateLimitReadWindowMs,
+      // Cleanup at least every window to bound stale entry retention.
+      cleanupIntervalMs: maxWindowMs,
+      entryTtlMs: maxWindowMs,
+      trustProxy: securityConfig.trustProxy,
+    });
+    app.use("*", rateLimitMiddleware);
+  }
+
+  // Better Auth instance — created with validated session secret
+  const auth = securityConfig.authSessionSecret
+    ? createAuth(securityConfig.authSessionSecret, env)
+    : undefined;
+  const authApi = (auth?.api ?? {}) as Record<string, unknown>;
+
+  const authSessionConfig = {
+    authEnabled: securityConfig.authEnabled,
+    authSessionSecret: securityConfig.authSessionSecret,
+    authSessionCookieName: securityConfig.authSessionCookieName,
+    authSessionCookieSecure: securityConfig.authSessionCookieSecure,
+    authSessionCookieSameSite: securityConfig.authSessionCookieSameSite,
+    authSessionIdleTimeoutSeconds: securityConfig.authSessionIdleTimeoutSeconds,
+    authSessionGeneration: securityConfig.authSessionGeneration,
+    authSessionMaxAgeSeconds: securityConfig.authSessionMaxAgeSeconds,
+  };
+
+  const resolveFallbackClaims = async (
+    requestHeaders: Headers,
+  ): Promise<AuthSessionClaims | null> => {
+    const getSession = authApi.getSession as
+      | ((options: {
+          headers: Headers;
+          returnHeaders: boolean;
+        }) => Promise<BetterAuthSessionApiResult>)
+      | undefined;
+
+    if (typeof getSession !== "function") {
+      return null;
+    }
+
+    try {
+      const fallbackSessionResult = await getSession({
+        headers: requestHeaders,
+        returnHeaders: true,
+      });
+
+      const mappedFallbackClaims = fallbackSessionResult.response
+        ? mapFallbackSessionClaims(
+            fallbackSessionResult.response,
+            authSessionConfig,
+          )
+        : null;
+      return mappedFallbackClaims
+        ? validateFallbackSessionClaims(mappedFallbackClaims, authSessionConfig)
+        : null;
+    } catch (error) {
+      logger.debug({ err: error }, "auth: fallback session check failed");
+      return null;
+    }
+  };
+
+  if (securityConfig.authEnabled) {
+    app.use(
+      "*",
+      createAuthGateMiddleware(
+        {
+          ...authSessionConfig,
+          authLoginPath: securityConfig.authLoginPath,
+        },
+        (request) => resolveFallbackClaims(request.headers),
+      ),
+    );
+  }
+
+  app.use(
+    "*",
+    createCsrfProtectionMiddleware({
+      authEnabled: securityConfig.authEnabled,
+      csrfProtectionEnabled: securityConfig.csrfProtectionEnabled,
+      csrfTrustedOrigins: securityConfig.csrfTrustedOrigins,
+      authSessionCookieName: securityConfig.authSessionCookieName,
+    }),
+  );
+
+  // Origin policy: enforce trusted origins on mutating requests (POST, PUT, PATCH, DELETE).
+  // Fills the gap between CSRF (session-auth only) and write-token auth (no origin check).
+  // Non-browser clients with valid write auth tokens bypass origin checks.
+  app.use(
+    "*",
+    createOriginPolicyMiddleware({
+      originPolicyEnabled: securityConfig.originPolicyEnabled,
+      csrfTrustedOrigins: securityConfig.csrfTrustedOrigins,
+      writeAuthToken: securityConfig.writeAuthToken,
+    }),
+  );
+
+  if (securityConfig.authEnabled) {
+    const authPlugins = Array.isArray(auth?.options?.plugins)
+      ? auth.options.plugins
+      : [];
+    const oidcApiAvailable =
+      Boolean(auth) &&
+      securityConfig.authMode === "oidc" &&
+      authPlugins.length > 0 &&
+      typeof authApi.signInWithOAuth2 === "function" &&
+      typeof authApi.oAuth2Callback === "function";
+
+    const authUnavailableRouteHandler = (c: Context<AppEnv>) =>
+      c.json(
+        {
+          error: "Auth provider not configured",
+          message:
+            "Authentication is enabled, but login/callback handlers are not available.",
+        },
+        501,
+      );
+
+    const isLocalAuth = securityConfig.authMode === "local";
+
+    const authLoginRouteHandler = async (c: Context<AppEnv>) => {
+      if (isLocalAuth) {
+        // For local auth, the GET /auth/login serves the static login page via nginx.
+        // If the API receives a GET request directly, return a fallback message.
+        return c.json(
+          {
+            error: "Login page not available",
+            message:
+              "Navigate to /auth/login in your browser to access the login page.",
+          },
+          501,
+        );
+      }
+
+      if (!oidcApiAvailable) {
+        return authUnavailableRouteHandler(c);
+      }
+
+      try {
+        const signInWithOAuth2 = authApi.signInWithOAuth2 as (options: {
+          headers: Headers;
+          body: {
+            providerId: string;
+            callbackURL: string;
+          };
+          returnHeaders: boolean;
+        }) => Promise<{ headers?: Headers; response?: { url?: string } }>;
+
+        const signInResult = await signInWithOAuth2({
+          headers: c.req.raw.headers,
+          body: {
+            providerId: OIDC_PROVIDER_ID,
+            callbackURL: normalizeNextPath(c.req.query("next")),
+          },
+          returnHeaders: true,
+        });
+
+        appendSetCookieHeaders(c, signInResult.headers);
+
+        const redirectUrl = signInResult.response?.url;
+        if (!redirectUrl) {
+          throw new Error("OIDC provider did not return an authorization URL.");
+        }
+
+        return c.redirect(redirectUrl, 302);
+      } catch (error) {
+        logger.error({ err: error }, "OIDC login initiation failed");
+        return c.json(
+          {
+            error: "Authentication failed",
+            message: "Unable to initiate OIDC login.",
+          },
+          502,
+        );
+      }
+    };
+
+    const authCallbackRouteHandler = async (c: Context<AppEnv>) => {
+      if (isLocalAuth) {
+        return c.json({ error: "Not found" }, 404);
+      }
+
+      if (!oidcApiAvailable) {
+        return authUnavailableRouteHandler(c);
+      }
+
+      const callbackUrl = new URL(c.req.url);
+      callbackUrl.pathname = "/api/auth/oauth2/callback/oidc";
+      const proxyRequest = new Request(callbackUrl.toString(), {
+        method: c.req.raw.method,
+        headers: c.req.raw.headers,
+      });
+      return auth!.handler(proxyRequest);
+    };
+
+    const authCheckRouteHandler = async (c: Context<AppEnv>) => {
+      const signedClaims = resolveAuthenticatedSessionClaims(
+        c.req.raw,
+        authSessionConfig,
+      );
+
+      if (signedClaims) {
+        c.set("authSubject", signedClaims.sub);
+        c.set("authClaims", signedClaims);
+
+        const refreshedCookie = createRefreshedAuthSessionCookieHeader(
+          signedClaims,
+          authSessionConfig,
+        );
+        if (refreshedCookie) {
+          c.header("Set-Cookie", refreshedCookie, { append: true });
+        }
+
+        return c.body(null, 204);
+      }
+
+      const fallbackClaims = await resolveFallbackClaims(c.req.raw.headers);
+      if (fallbackClaims) {
+        c.set("authSubject", fallbackClaims.sub);
+        c.set("authClaims", fallbackClaims);
+        return c.body(null, 204);
+      }
+
+      safeLogAuthEvent("auth.session.invalid", c.req.raw, {
+        reason: "missing or invalid session cookie",
+      });
+      return c.json(
+        {
+          error: "Unauthorized",
+          message: "Authentication required.",
+        },
+        401,
+      );
+    };
+
+    const authLogoutRouteHandler = async (c: Context<AppEnv>) => {
+      const signedClaims = resolveAuthenticatedSessionClaims(
+        c.req.raw,
+        authSessionConfig,
+      );
+      let logoutSubject: string | undefined = signedClaims?.sub;
+
+      if (signedClaims) {
+        c.set("authSubject", signedClaims.sub);
+        c.set("authClaims", signedClaims);
+        invalidateAuthSession(signedClaims.sid, signedClaims.exp);
+      }
+
+      const fallbackClaims = await resolveFallbackClaims(c.req.raw.headers);
+      if (fallbackClaims) {
+        invalidateAuthSession(fallbackClaims.sid, fallbackClaims.exp);
+        if (!logoutSubject) {
+          logoutSubject = fallbackClaims.sub;
+        }
+      }
+
+      const signOut = authApi.signOut as
+        | ((options: {
+            headers: Headers;
+            returnHeaders: boolean;
+          }) => Promise<{ headers?: Headers }>)
+        | undefined;
+      if (typeof signOut === "function") {
+        try {
+          const signOutResult = await signOut({
+            headers: c.req.raw.headers,
+            returnHeaders: true,
+          });
+          appendSetCookieHeaders(c, signOutResult.headers);
+        } catch (error) {
+          logger.debug({ err: error }, "auth: provider sign-out failed");
+        }
+      }
+
+      if (logoutSubject) {
+        safeLogAuthEvent("auth.logout", c.req.raw, { subject: logoutSubject });
+      }
+
+      c.header(
+        "Set-Cookie",
+        createExpiredAuthSessionCookieHeader(authSessionConfig),
+        { append: true },
+      );
+      return c.body(null, 204);
+    };
+
+    app.get("/auth/login", authLoginRouteHandler);
+    app.get("/auth/callback", authCallbackRouteHandler);
+    // Better Auth's own callback path, for deployments whose IdP is registered
+    // against it. nginx strips the /api prefix before the request reaches us,
+    // so the bare form is the one that needs an explicit route; the /api form
+    // is already covered by the Better Auth wildcard below. See #3140.
+    app.get("/auth/oauth2/callback/oidc", authCallbackRouteHandler);
+    app.get("/auth/check", authCheckRouteHandler);
+    app.post("/auth/logout", authLogoutRouteHandler);
+
+    app.get("/api/auth/login", authLoginRouteHandler);
+    app.get("/api/auth/callback", authCallbackRouteHandler);
+    app.get("/api/auth/check", authCheckRouteHandler);
+    app.post("/api/auth/logout", authLogoutRouteHandler);
+
+    // Local auth: POST /auth/login for username/password authentication
+    if (
+      isLocalAuth &&
+      localAuth &&
+      securityConfig.localCredentials &&
+      securityConfig.authSessionSecret
+    ) {
+      const { createLoginRateLimiter, MAX_PASSWORD_LENGTH, verifyCredentials } =
+        localAuth;
+      const rateLimiter = createLoginRateLimiter();
+      const localCredentials = securityConfig.localCredentials;
+      const sessionSecret = securityConfig.authSessionSecret;
+      const LOGIN_BODY_MAX_SIZE = 8 * 1024; // 8KB
+
+      const localLoginBodyLimit = bodyLimit({
+        maxSize: LOGIN_BODY_MAX_SIZE,
+        onError: (c) => c.json({ error: "Request body too large" }, 413),
+      });
+
+      const localLoginHandler = async (c: Context<AppEnv>) => {
+        const contentType = c.req.header("content-type")?.toLowerCase();
+        if (!contentType || !contentType.includes("application/json")) {
+          return c.json(
+            {
+              error: "Bad Request",
+              message: "Content-Type must be application/json.",
+            },
+            400,
+          );
+        }
+
+        let body: unknown;
+        try {
+          body = await c.req.json();
+        } catch {
+          return c.json(
+            { error: "Bad Request", message: "Invalid JSON body." },
+            400,
+          );
+        }
+
+        if (!body || typeof body !== "object") {
+          return c.json(
+            {
+              error: "Bad Request",
+              message: "Request body must be a JSON object.",
+            },
+            400,
+          );
+        }
+
+        const { username: rawUsername, password } = body as Record<
+          string,
+          unknown
+        >;
+        if (
+          typeof rawUsername !== "string" ||
+          !rawUsername.trim() ||
+          typeof password !== "string" ||
+          !password
+        ) {
+          return c.json(
+            {
+              error: "Bad Request",
+              message: "Username and password are required.",
+            },
+            400,
+          );
+        }
+
+        const username = rawUsername.trim();
+        if (username.length > 255 || password.length > MAX_PASSWORD_LENGTH) {
+          return c.json(
+            { error: "Bad Request", message: "Invalid credential length." },
+            400,
+          );
+        }
+
+        const ip = resolveClientIpFromHeaders(c.req, {
+          trustProxy: securityConfig.trustProxy,
+          peerAddress: resolvePeerAddress(c),
+        });
+        if (!ip) {
+          // Skip rate limiting when client IP cannot be determined.
+          // Using a shared bucket would let one noisy client throttle all
+          // other unidentifiable clients.
+          return c.json(
+            {
+              error: "Bad Request",
+              message: "Unable to determine client identity for rate limiting.",
+            },
+            400,
+          );
+        }
+        const rateCheck = rateLimiter.check(ip);
+        if (!rateCheck.allowed) {
+          const retryAfterSeconds = Math.ceil(
+            (rateCheck.retryAfterMs ?? 0) / 1000,
+          );
+          c.header("Retry-After", String(retryAfterSeconds));
+          safeLogAuthEvent("auth.login.failure", c.req.raw, {
+            reason: "rate limited",
+          });
+          return c.json(
+            {
+              error: "Too Many Requests",
+              message: "Too many login attempts. Try again later.",
+            },
+            429,
+          );
+        }
+
+        // Record a tentative failure BEFORE the async verification to prevent
+        // concurrent requests from bypassing the rate limit window.
+        rateLimiter.recordFailure(ip);
+
+        const valid = await verifyCredentials(
+          username,
+          password,
+          localCredentials,
+        );
+        if (!valid) {
+          // Failure already recorded above
+          safeLogAuthEvent("auth.login.failure", c.req.raw, {
+            reason: "invalid credentials",
+          });
+          return c.json(
+            { error: "Unauthorized", message: "Invalid username or password." },
+            401,
+          );
+        }
+
+        // Success — clear the pre-recorded failure
+        rateLimiter.recordSuccess(ip);
+
+        const token = createSignedAuthSessionToken(
+          { sub: username, role: "admin" },
+          sessionSecret,
+          {
+            sessionMaxAgeSeconds: securityConfig.authSessionMaxAgeSeconds,
+            sessionIdleTimeoutSeconds:
+              securityConfig.authSessionIdleTimeoutSeconds,
+            sessionGeneration: securityConfig.authSessionGeneration,
+          },
+        );
+
+        // Compute expiration for cookie header
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const expiresAtSeconds =
+          nowSeconds + securityConfig.authSessionMaxAgeSeconds;
+
+        c.header(
+          "Set-Cookie",
+          createAuthSessionCookieHeader(
+            token,
+            expiresAtSeconds,
+            securityConfig,
+          ),
+          { append: true },
+        );
+
+        safeLogAuthEvent("auth.login.success", c.req.raw, {
+          subject: username,
+        });
+
+        return c.json({ ok: true });
+      };
+
+      app.post("/auth/login", localLoginBodyLimit, localLoginHandler);
+      app.post("/api/auth/login", localLoginBodyLimit, localLoginHandler);
+    }
+  }
+
+  // Better Auth routes handle auth endpoints for API consumers.
+  if (auth) {
+    const authHandler = createAuthHandler(auth);
+    app.on(["POST", "GET"], "/api/auth/*", authHandler);
+  }
+
+  // Hono's "/path/*" pattern matches both "/path" and "/path/...".
+  // Keep write-auth and body-limit middleware on matching wildcard path sets:
+  // "/layouts/*", "/api/layouts/*", "/assets/*", "/api/assets/*".
+  const writeAuth = createWriteAuthMiddleware(securityConfig.writeAuthToken);
+  app.use("/layouts/*", writeAuth);
+  app.use("/assets/*", writeAuth);
+  app.use("/api/layouts/*", writeAuth);
+  app.use("/api/assets/*", writeAuth);
+
+  // Admin authorization for write operations when auth is enabled.
+  // Runs after auth gate (which sets authClaims) and write-token auth.
+  if (securityConfig.authEnabled) {
+    const requireAdmin = createRequireAdminMiddleware();
+    app.use("/layouts/*", requireAdmin);
+    app.use("/assets/*", requireAdmin);
+    app.use("/api/layouts/*", requireAdmin);
+    app.use("/api/assets/*", requireAdmin);
+  }
+
+  // Health check
+  app.get("/health", (c) => c.json(HEALTH_RESPONSE));
+  app.get("/api/health", (c) => c.json(HEALTH_RESPONSE));
+
+  // Version endpoint — public, unauthenticated (see AUTH_PUBLIC_PATHS).
+  // Used by the post-release version-alignment test to confirm every image
+  // published under a release tag reports the same version. Exposes only build
+  // metadata — no secrets, env, or internal paths.
+  const versionInfo = resolveVersionInfo(env);
+  app.get("/version", (c) => c.json(versionInfo));
+  app.get("/api/version", (c) => c.json(versionInfo));
+
+  // Apply body size limit to asset uploads (5MB default, configurable via env)
+  const parsedMaxAssetSize = Number.parseInt(env.MAX_ASSET_SIZE ?? "", 10);
+  const maxAssetSize =
+    Number.isFinite(parsedMaxAssetSize) && parsedMaxAssetSize > 0
+      ? parsedMaxAssetSize
+      : DEFAULT_MAX_ASSET_SIZE;
+
+  const assetBodyLimit = bodyLimit({
+    maxSize: maxAssetSize,
+    onError: (c) => c.json({ error: "File too large" }, 413),
+  });
+
+  app.use("/assets/*", assetBodyLimit);
+  app.use("/api/assets/*", assetBodyLimit);
+
+  // Body size limits for layout data (YAML)
+  const layoutBodyLimit = bodyLimit({
+    maxSize: DEFAULT_MAX_LAYOUT_SIZE,
+    onError: (c) => c.json({ error: "Layout data too large" }, 413),
+  });
+
+  app.use("/layouts/*", layoutBodyLimit);
+  app.use("/api/layouts/*", layoutBodyLimit);
+
+  // Storage quota — enforce layout and asset count limits on write operations.
+  // Applied after body limits (so request body is already validated) and before
+  // route handlers. Skips check when both quotas are unlimited (max=0).
+  const storageQuotaMiddleware = createStorageQuotaMiddleware({
+    maxLayouts: securityConfig.maxLayouts,
+    maxAssetsPerLayout: securityConfig.maxAssetsPerLayout,
+  });
+
+  app.use("/layouts/*", storageQuotaMiddleware);
+  app.use("/assets/*", storageQuotaMiddleware);
+  app.use("/api/layouts/*", storageQuotaMiddleware);
+  app.use("/api/assets/*", storageQuotaMiddleware);
+
+  // Mount each router at the root path (nginx strips /api when proxying) and
+  // at the /api/* alias for direct access. Using a helper keeps the two
+  // mounts adjacent so a new router can't be added at one path and silently
+  // missed at the other.
+  const mountWithAlias = <E extends Env>(
+    path: `/${string}`,
+    router: Hono<E>,
+  ) => {
+    app.route(path, router);
+    app.route(`/api${path}`, router);
+  };
+
+  mountWithAlias("/layouts", layouts);
+  mountWithAlias("/assets", assets);
+
+  // 404 handler
+  app.notFound((c) => c.json({ error: "Not found" }, 404));
+
+  // Error handler
+  app.onError((err, c) => {
+    logger.error({ err }, "Unhandled error");
+    return c.json({ error: "Internal server error" }, 500);
+  });
+
+  return app;
+}

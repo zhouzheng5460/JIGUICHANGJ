@@ -1,0 +1,650 @@
+, label:
+, label: '10
+, label: '19
+, label: '23
+, rear
+, selected
+'s starter-template menu (#2829). The
+(null); type ParsedYaml = Awaited
+(prefers-reduced-motion: reduce)
+&mdash; too long for some browsers; download the file instead
+= 22px, so 1
+1 device
+1 rack
+100GbE QSFP28
+10GbE (RJ45)
+10GbE SFP+
+19" (Standard)
+1GbE (RJ45)
+1GbE SFP
+25GbE SFP28
+4-post cabinet
+40GbE QSFP+
+A copy already exists on the server
+a server is reachable
+A storage server is available
+About Rackula
+action-button fit-button
+actions actions-centered
+ADAT Optical
+Add
+Add a device called '<query>'
+Add a device to get started
+Add a rack
+Add a rack to control its rear view.
+Add bay
+Add custom device
+Add device
+Add Device
+add device
+Add device...
+Add notes about this device placement...
+Add notes about this placement
+Add notes about this rack...
+added to Devices`,
+Additional notes about the device...
+AES3
+All Devices
+All devices in this rack will be removed
+All instances will be removed
+An unexpected error occurred. Please try again.
+Annotation Field
+Annotations
+Appearance
+Apply anyway
+Applying...
+ArrowDown
+ArrowLeft
+ArrowRight
+ArrowUp
+ArrowUp ArrowDown
+Asset Tag
+Auto-saved
+AV/Media
+back off
+Back to commands
+Backed
+Backspace
+Banana for scale
+Banana for scale (7 inches)
+Banana for scale (approximately 7 inches)
+Base Weight
+Base weight must be zero or a positive number.
+Bay Count
+Bay count controls
+Bay rack
+Bayed Rack
+Bayed racks must share the same height.
+bayed-row front-row
+bayed-row rear-row
+Behaviour
+Bidirectional
+Blank layout
+Blank Panel
+blocked-slot blocked-slot-bg
+blocked-slot blocked-slot-pattern
+Both
+Both (full-depth)
+Both Faces
+Branch
+Brand
+brand-icon brand-icon-fallback
+Browser
+btn btn-choose
+btn btn-clear
+btn btn-remove
+btn btn-secondary
+Build info copied
+Built
+Cable Management
+Can't place device here
+Cancel
+Cancel edits
+Cancel placement
+Category
+Chassis
+Choose File
+Choose how to proceed to avoid overwriting newer layout changes by mistake.
+Clean Up Device Library
+Clean Up Device Library?
+Clean up unused device types
+Clear
+Clear all devices from rack
+Clear filters
+Clear Rack
+Clear search
+Click a slot to place. Esc to cancel.
+Close
+Close dialog
+Close layout
+Collapse panel
+Colour
+Command palette
+command-item command-item--lead
+Commands
+Commit
+Compatible devices only
+Confirm before leaving with unsaved work.
+conflict detected, baselineYaml differs from latestYaml
+Consolas
+Console
+Container
+Container U
+Content-Type
+context-menu-item context-menu-item--destructive
+control-group control-group--history
+control, shared by the tab-bar
+Cooling
+Copy link to clipboard
+Corrupted file
+Create a layout to get started
+Create custom device
+Create your first rack to get started
+Custom hex colour
+Custom only
+Dante
+Dark
+Data
+DB25 (TASCAM)
+Del
+Delete
+Delete bayed rack
+Delete Bayed Rack
+Delete Device Type
+Delete from Library
+Delete from library
+Delete layout
+Delete Layout
+Delete Layout?
+Delete Rack
+Delete rack
+Delete unused device type
+Depth
+Depth (mm)
+Depth must be a positive number in millimetres.
+Deselect All
+detail-section info-section
+detail-section name-section
+detail-section notes-section
+detail-section optional-section
+DEV -
+Device
+Device actions
+Device deselected, closing bottom sheet and fitting all
+Device selected: %O
+Device type details
+Device type notes
+Devices
+Dismiss hint
+Dismiss notification
+Display mode
+Display Mode
+display: none;
+DisplayPort
+Disposing panzoom
+DMX512 (XLR-5)
+Documentation
+Don't ask again
+Down
+Download Layout File
+Download QR
+DRackula - development environment
+Drag right to bay a new rack
+Drag right to create a bayed rack
+Drag to resize. Arrow Up grows, Arrow Down shrinks.
+Duplicate
+Duplicate Rack
+e.g. 192.168.1.10
+e.g., 192.168.1.100
+e.g., Dell PowerEdge R740
+E31837
+edge-grip-seam edge-grip-seam--left
+edge-grip-seam edge-grip-seam--right
+Edit
+Edit and view panel
+Edit display name
+Edit name
+Edit Rack
+Editable mode
+element because Safari 18.x doesn't properly compute hit areas on transformed
+Enable bayed racks
+Enter
+Escape
+Export
+Export first
+Export preview generation failed:
+Export...
+Exporting...
+fact-value fact-value-icon
+Failed to copy
+Failed to copy link
+Failed to delete layout
+Failed to download layout
+Failed to generate QR code
+Failed to load layouts
+Failed to load snapshots
+Failed to process image
+Failed to read file
+failed to reconcile saved layouts from server: %O
+Female
+FFFFFF
+field field-notes
+Field shown in annotation column (press N to toggle)
+field-input notes-input
+File corrupted
+Filter devices
+Finish the current open first
+Firewall
+Fit all
+Fit All
+Flip
+Flip face
+Focus
+Form Factor
+form-group checkbox-group
+form-group rack-selection
+form-row form-row-symmetric
+Format
+From template
+FRONT
+Front
+Front & Rear (Side-by-Side)
+Front and rear images available
+Front Image
+Front image available
+Front Only
+Full
+Full Depth
+Generating QR code...
+Generic
+Group
+group-header group-toggle
+Grouping mode
+Half
+Half Width
+Half-depth device
+Half-depth: Mounts on one face only
+Half-width device
+Half-width: Mounts inside a carrier, not directly on the rails
+Has image
+HDMI
+Height
+Height (U)
+helper-text error
+helper-text position-hint
+Hide
+Hide devices that do not fit the active rack width.
+History actions
+Home
+i * (rackWidth + bayGap)), );
+Identity
+Image
+Image + Label
+Import
+Import devices file
+Import from local file
+Import from local file (.zip)
+Import from NetBox
+Import input mode
+Include legend
+Include sharing QR code
+info-row position-row
+info-value position-value
+info-value user-agent
+Input
+input-field textarea
+Inside Container
+instead of
+Invalid file
+Invalid share link
+Invalid username or password.
+IP Address
+IP Address/Hostname
+JPEG
+Keep All
+Keep server copy
+Label
+Last exported
+last reached
+Last reached server
+Last saved
+layered sheet
+Layout changed while this editor was open.
+Layout file downloaded
+Layout library
+Layout name
+Layout too large for QR code
+Layouts
+Layouts, racks and devices panel
+Light
+Link copied to clipboard
+Load Layout
+Loading saved layouts...
+Loading snapshots...
+loadLayouts: failed %O
+LOCAL -
+Lock the layout for viewing
+M 384 128 C 320 128 277.333 85.333 277.333 85.333 L 341.333 85.333 L 384 128 L 384 128 Z
+M 853.333 896 L 874.667 853.333 L 896 853.333 L 896 896 L 853.333 917.333 L 853.333 896 Z
+M10 12H18M18 12L15 9M18 12L15 15
+M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z
+M12 16.01L12.01 15.9989
+M12 16V4M12 4L15.5 7.5M12 4L8.5 7.5
+m12 17.01l.01-.011
+M12 17v5
+M14 65 L36 15 L44 15 L66 65 Z
+M15 6L9 12L15 18
+M16 3H18C20.2091 3 22 4.79086 22 7V17C22 19.2091 20.2091 21 18 21H16
+M18 65 L37 18 L43 18 L62 65 Z
+M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2
+M192,232a12,12,0,0,1-12,12H76a12,12,0,0,1,0-24H180A12,12,0,0,1,192,232Z
+M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4
+M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13
+M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z
+M232,200a12,12,0,0,1-12,12H36a12,12,0,0,1,0-24H220A12,12,0,0,1,232,200Z
+M3 7v6h6
+M6 15L12 9L18 15
+M6 20L18 20
+M6 26 L14 6 L18 6 L26 26 Z
+M6 9L12 15L18 9
+M7 12h10M7 8h6
+M8 26 L14.5 7 L17.5 7 L24 26 Z
+M9 20.027c-3 .973-5.5 0-7-3
+M9 6L15 12L9 18
+Made in Canada 🇨🇦 with ❤️
+Male
+Management
+Management Only
+Manufacturer
+menu-content menu-inline
+menu-label starter-text
+message hint
+MIDI (5-pin DIN)
+Mobile navigation
+mobile redo applied
+mobile redo requested
+mobile redo skipped: canRedo=false
+mobile undo applied
+mobile undo requested
+mobile undo skipped: canUndo=false
+Monaco
+Mounted Face
+Move
+Move device down by 1 rack unit
+Move device up by 1 rack unit
+Move Down
+Move down 1U
+Move rack left
+Move rack right
+Move Up
+Move up 1U
+Name
+Name is required
+Network
+Never saved
+New from template
+New layout
+New layout (new tab)
+New layout options
+New Rack
+New rack
+Next rack
+No device type image
+No devices in library
+No devices match
+No image
+No layouts saved on server yet.
+No matching commands
+No matching devices
+No prompts are dismissed.
+No rack selected
+No racks configured
+No racks yet
+No racks yet. Add one to get started.
+no saved layouts
+No saved layouts
+No snapshots for this layout.
+No unused custom device types right now.
+No unused device types found.
+noopener noreferrer
+Not exported
+Not saved to the server
+Not yet saved
+Notes
+Notes (optional)
+nothing rear-facing here
+Occupies both front and rear rack faces
+Occupies left or right half of rack width
+Offer to remove unused custom device types before saving or exporting.
+Open
+Open frame
+Open in another tab
+Open layout
+Open layouts
+Open the Devices tab on the left and drag devices into your rack.
+Open the Devices tab, tap a device to arm it, then tap a rack slot to place it.
+Other
+Outlets
+Output
+overflow: visible
+Override set
+Panel sections
+Parsing...
+Part Number
+Party Mode disabled (reduced motion preference)
+Party Mode!
+Password
+Patch Panel
+PDF
+persistence initialization failed; continuing without server persistence: %O
+Phoenix/Euroblock
+Pin device
+Pin to top
+Pinned
+Pinned devices
+Placement
+Placing
+PNG
+PoE Powered
+PoE Source
+port-tooltip-badge mgmt
+port-tooltip-badge poe
+Position
+position: absolute; pointer-events: none;
+POST
+Power
+Preview
+Preview generation failed
+Previous layout kept in Layouts
+Previous rack
+previously focused element
+Project
+Prompt to clean up unused types
+Pull to bay
+QR Code
+QR code for layout
+QR generation failed:
+qr-message qr-error
+Rack
+Rack actions
+Rack list
+Rack navigation
+Rack Width
+Rack Width Compatibility
+Rack width in inches
+Racks
+Rackula
+Read-only
+Read-only mode
+REAR
+Rear
+Rear Image
+Rear image available
+Rear Only
+Rear View
+Recent
+Redo
+Release to bay
+Reload
+Reload latest
+Remove
+Remove bay
+Remove from rack
+Remove from Rack
+Remove image
+Rename
+Rename Layout
+Replace
+Replace Current Rack?
+Replace server copy
+Replace this layout?
+Report Bug
+Reset
+Reset dismissed prompts
+Reset to default
+Reset to default colour
+Reset zoom
+Reset Zoom
+Restore
+Restore from backup (.zip)
+Restoring...
+Retry
+Review
+Review & Clean Up
+RS-232
+RS-422
+Save
+Save all layouts
+Save As
+Save First
+Save to file
+Save to server
+Saved
+Saved on Server
+Scan to open in
+SDI (BNC)
+Search
+Search devices
+Search devices...
+Search or jump to...
+Search or run a command
+Select a rack or device to edit its properties.
+Select All
+Selection
+Serial Number
+Server
+Set by device depth. To mount on a single face, change the device type to half-depth.
+Set override
+Settings
+SF Mono
+Share Ideas
+Share Layout
+Share Link
+Shared layout loaded
+Shelf
+Show
+Show a banana beside racks for a sense of size.
+Show Rear View
+Show rear view on canvas
+Show snapshots
+Show the annotation column beside each rack.
+Show the controls for baying racks together. Existing bays stay put when off.
+Sidebar navigation
+Sign in to continue
+Skip to canvas
+Slot
+slot-status slot-status-muted
+snapshots-status empty
+snapshots-status error
+Space Grotesk
+Speakon
+Starter templates
+status-box empty
+status-box error
+Stay in browser mode
+Storage
+storage-details-note storage-details-warn
+Stored in this browser only
+Stored on the server
+swap this face for the other one
+Switch back to browser mode
+Switch to server mode
+Tags
+Tap a slot to place.
+Test Dialog
+The clean-up prompt is currently dismissed.
+Theme
+This deployment now stores layouts on the server. Upload your local copy to keep it here.
+This layout has no racks yet.
+This layout has not been saved to the server.
+This will remove the device from your library.
+thumb thumb-empty
+To make server mode the default for everyone, set RACKULA_STORAGE_MODE=server.
+Toggle display mode
+toggleSnapshots: failed %O
+Too many login attempts. Please wait a moment and try again.
+toolbar-section toolbar-layout-name
+toolbar-section toolbar-left
+toolbar-section toolbar-right
+toolbar-section toolbar-right toolbar-right-mobile
+toolbar-section toolbar-tabs
+transform-box: fill-box; transform-origin: 50% 50%;
+transform: rotate(19deg)
+Transparent background
+Try removing some devices to reduce size
+Type
+U Numbering
+U numbering direction
+U position labels
+U1 at bottom
+Unable to encode layout
+Unable to reach the server. Please check your connection.
+Undo
+Undo All
+Universal
+Unknown
+Unknown error
+Unpin device
+Unpin from top
+Untitled
+Untitled Rack
+Unused device types
+Upload
+Upload and switch
+Upload and switch?
+Upload File
+Uploading...
+Use ↑↓ keys to move device
+Username
+Using device type image
+VA Rating
+Version
+View
+View actions
+void | Promise
+void; /** Mobile long press for rack editing */ onlongpress?: (event: CustomEvent
+void; /** Mobile long press for rack editing */ onracklongpress?: (event: CustomEvent
+void; /** Mobile tap-to-place event */ onplacementtap?: ( event: CustomEvent
+void; ondevicedrop?: ( event: CustomEvent
+void; ondevicemove?: ( event: CustomEvent
+void; ondevicemoverack?: ( event: CustomEvent
+void; ondeviceselect?: ( event: CustomEvent
+void; ondragstart?: ( event: CustomEvent
+void; onduplicate?: ( event: CustomEvent
+void; onplacementtap?: ( event: CustomEvent
+void; onracklongpress?: (event: CustomEvent
+void; onrackselect?: (event: CustomEvent
+Wall mount
+Warn on unsaved changes
+Which rack sizes this device fits
+Width
+Working...
+XLR-5
+xMidYMid slice
+your layout
+Your most recent edits may not be saved.
+Your open layout is safe. Retry to list the rest.
+Zoom
+Zoom controls
+Zoom in
+Zoom out

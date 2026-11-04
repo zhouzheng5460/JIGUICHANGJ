@@ -1,0 +1,772 @@
+/**
+ * Test Factories
+ *
+ * Centralized factory functions for creating test data.
+ * Use these instead of defining inline mocks in test files.
+ *
+ * @example
+ * import { createTestRack, createTestDeviceType, createTestDevice } from './factories';
+ *
+ * const rack = createTestRack({ height: 24 });
+ * const deviceType = createTestDeviceType({ u_height: 2 });
+ * const device = createTestDevice({ position: 5 });
+ */
+
+import { vi, type Mock } from "vitest";
+import type {
+  Rack,
+  DeviceType,
+  PlacedDevice,
+  DeviceFace,
+  DeviceCategory,
+  Layout,
+  LayoutSettings,
+  Airflow,
+  Slot,
+  RackWidth,
+  SlotWidth,
+  Connection,
+  InterfaceTemplate,
+  InterfaceType,
+  PlacedPort,
+  PortDirection,
+} from "$lib/types";
+import type { CreateDeviceTypeInput } from "$lib/stores/layout-helpers";
+import type { NetBoxDeviceType } from "$lib/utils/netbox-import";
+import type { Command, CommandType } from "$lib/stores/commands/types";
+import type {
+  LibraryEntry,
+  BrowserLaunch,
+  SavedLayoutItem,
+} from "$lib/storage";
+import type { CatalogueEntry } from "$lib/components/layouts-library";
+import { toInternalUnits } from "$lib/utils/position";
+import { CATEGORY_COLOURS } from "$lib/types/constants";
+import { getLayoutStore, resetLayoutStore } from "$lib/stores/layout.svelte";
+import type { DeleteTarget } from "$lib/stores/dialogs.svelte";
+import { resetHistoryStore } from "$lib/stores/history.svelte";
+import { generateId } from "$lib/utils/device";
+
+// =============================================================================
+// Rack Factory
+// =============================================================================
+
+/**
+ * Creates a test Rack with sensible defaults.
+ * All properties can be overridden.
+ */
+export function createTestRack(overrides: Partial<Rack> = {}): Rack {
+  return {
+    id: overrides.id ?? "rack-1",
+    name: "Test Rack",
+    height: 42,
+    width: 19,
+    position: 0,
+    desc_units: false,
+    show_rear: true,
+    form_factor: "4-post",
+    starting_unit: 1,
+    devices: [],
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// DeviceType Factory
+// =============================================================================
+
+export interface CreateTestDeviceTypeOptions {
+  slug?: string;
+  u_height?: number;
+  /** `null` omits the model field entirely (to test model-less / slug-fallback). */
+  model?: string | null;
+  manufacturer?: string;
+  category?: DeviceCategory;
+  colour?: string;
+  is_full_depth?: boolean;
+  airflow?: Airflow;
+  face?: DeviceFace;
+  rack_widths?: RackWidth[];
+  slot_width?: SlotWidth;
+}
+
+/**
+ * Creates a test DeviceType with sensible defaults.
+ * Schema v1.0.0: Flat structure with colour, category at top level
+ *
+ * @example
+ * // Simple usage
+ * const device = createTestDeviceType();
+ *
+ * // With overrides
+ * const server = createTestDeviceType({ u_height: 2, category: 'server' });
+ *
+ * // Shorthand for slug + height
+ * const switch = createTestDeviceType('my-switch', 1);
+ */
+export function createTestDeviceType(
+  slugOrOptions?: string | CreateTestDeviceTypeOptions,
+  u_height?: number,
+): DeviceType {
+  // Handle shorthand: createTestDeviceType('slug', 2)
+  if (typeof slugOrOptions === "string") {
+    return {
+      slug: slugOrOptions,
+      model: `Test Device ${slugOrOptions}`,
+      u_height: u_height ?? 1,
+      // Flat structure in v1.0.0
+      category: "server",
+      colour: "#4A90D9",
+    };
+  }
+
+  // Handle options object
+  const options = slugOrOptions ?? {};
+  const result: DeviceType = {
+    slug: options.slug ?? "test-device",
+    u_height: options.u_height ?? 1,
+    // Flat structure in v1.0.0
+    category: options.category ?? "server",
+    colour: options.colour ?? "#336699",
+  };
+
+  // model: null explicitly omits the field (to test model-less / slug-fallback
+  // ordering); undefined or omitted uses the default.
+  if (options.model !== null) {
+    result.model = options.model ?? "Test Device";
+  }
+
+  // Add optional properties only if specified
+  if (options.manufacturer) result.manufacturer = options.manufacturer;
+  if (options.is_full_depth !== undefined)
+    result.is_full_depth = options.is_full_depth;
+  if (options.airflow) result.airflow = options.airflow;
+  if (options.rack_widths) result.rack_widths = options.rack_widths;
+  if (options.slot_width !== undefined) result.slot_width = options.slot_width;
+
+  return result;
+}
+
+/**
+ * Creates a CreateDeviceTypeInput with sensible defaults.
+ * Use this for store.addDeviceType(), which derives the slug from `name`
+ * and records the action for undo/dirty tracking.
+ *
+ * @example
+ * store.addDeviceType(createTestDeviceTypeInput({ name: "Test Server", u_height: 2 }));
+ */
+export function createTestDeviceTypeInput(
+  overrides: Partial<CreateDeviceTypeInput> = {},
+): CreateDeviceTypeInput {
+  return {
+    name: "Test Device",
+    u_height: 1,
+    category: "server",
+    colour: "#4A90D9",
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a NetBoxDeviceType with the three required identity fields filled in.
+ * Use this in netbox-import tests and override only the field under test.
+ *
+ * @example
+ * const netbox = createTestNetBoxDeviceType({ slug: "Weird Box" });
+ */
+export function createTestNetBoxDeviceType(
+  overrides: Partial<NetBoxDeviceType> = {},
+): NetBoxDeviceType {
+  return {
+    manufacturer: "Generic",
+    model: "Device",
+    slug: "generic-device",
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// PlacedDevice Factory
+// =============================================================================
+
+/**
+ * A PlacedDevice plus the pre-carrier legacy `slot_position` marker. The
+ * carrier-first model dropped `slot_position` from PlacedDevice (#2294), but
+ * the load-path adapter still reads it off raw legacy input to wrap half-width
+ * pairs into carriers. Legacy fixtures use this shape to exercise that read.
+ */
+export type LegacyPlacedDevice = PlacedDevice & {
+  slot_position?: "left" | "right" | "full";
+};
+
+/**
+ * Creates a test PlacedDevice with sensible defaults.
+ * Schema v1.0.0: PlacedDevice now requires a UUID id field
+ *
+ * @param overrides.position - Human units (e.g., U10). Converted to internal units.
+ */
+export function createTestDevice(
+  overrides: Partial<LegacyPlacedDevice> = {},
+): LegacyPlacedDevice {
+  // Convert position from human units to internal units
+  const positionInHumanUnits = overrides.position ?? 10;
+  return {
+    id: overrides.id ?? generateId(),
+    device_type: "test-device",
+    position: toInternalUnits(positionInHumanUnits),
+    face: "front",
+    ...overrides,
+    // Ensure position override is converted
+    ...(overrides.position !== undefined
+      ? { position: toInternalUnits(overrides.position) }
+      : {}),
+  };
+}
+
+/**
+ * Creates a test InterfaceTemplate. Defaults to a gigabit RJ45 port; override
+ * `type` to exercise other interface types.
+ */
+export function createTestInterfaceTemplate(
+  overrides: Partial<InterfaceTemplate> = {},
+): InterfaceTemplate {
+  return {
+    name: "Test Interface",
+    type: "1000base-t",
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a test PlacedPort. Defaults to a gigabit RJ45 port instance;
+ * override `type`/`direction` to exercise other interface types or a
+ * direction override that differs from its InterfaceTemplate.
+ */
+export function createTestPlacedPort(
+  overrides: Partial<PlacedPort> = {},
+): PlacedPort {
+  return {
+    id: overrides.id ?? generateId(),
+    template_name: "Test Interface",
+    template_index: 0,
+    type: "1000base-t",
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a test Connection between two PlacedPort ids.
+ * Defaults connect "port-a" to "port-b"; override to match the ports under
+ * test (e.g. real ids from createTestPlacedPort or a placed device).
+ */
+export function createTestConnection(
+  overrides: Partial<Connection> = {},
+): Connection {
+  return {
+    id: overrides.id ?? generateId(),
+    a_port_id: "port-a",
+    b_port_id: "port-b",
+    ...overrides,
+  };
+}
+
+/**
+ * Places a device with the given interfaces in a rack via the real placement
+ * pipeline (store.placeDevice -> instantiatePorts) and returns its id and
+ * resulting PlacedPort instances, with real store-generated ids. Shared by
+ * connection-store.test.ts and connection-creation.test.ts so both exercise
+ * the same setup instead of duplicating it.
+ *
+ * Each entry is either a bare InterfaceType (uses the InterfaceTemplate
+ * default direction) or an object with a `direction` override, for tests
+ * that need to set the interface template's direction explicitly.
+ *
+ * Resolves the placed device by scoping to `rackId` and taking the last
+ * device with a matching slug in that rack's devices array (placeDeviceRaw
+ * always appends, so the most recently placed instance is always last),
+ * rather than by slug alone: a global first-match would return the wrong
+ * instance across racks, or an earlier instance within the same rack, when a
+ * test places more than one device of the same type. Deliberately not
+ * matching on `position` instead: PlacedDevice.position is stored in
+ * internal units (position.ts's toInternalUnits, U x 6), not the human-unit
+ * `position` argument this function takes, so a naive `d.position ===
+ * position` comparison would never match.
+ */
+export function placeDeviceWithPorts(
+  store: ReturnType<typeof getLayoutStore>,
+  rackId: string,
+  slug: string,
+  position: number,
+  interfaces: Array<
+    InterfaceType | { type: InterfaceType; direction?: PortDirection }
+  >,
+): { deviceId: string; ports: PlacedPort[] } {
+  const deviceType = createTestDeviceType({ slug });
+  deviceType.interfaces = interfaces.map((entry, index) => {
+    const spec = typeof entry === "string" ? { type: entry } : entry;
+    return createTestInterfaceTemplate({ name: `port-${index}`, ...spec });
+  });
+  store.addDeviceTypeRaw(deviceType);
+  store.placeDevice(rackId, slug, position);
+  const rack = store.racks.find((r) => r.id === rackId)!;
+  const matches = rack.devices.filter((d) => d.device_type === slug);
+  const device = matches[matches.length - 1]!;
+  return { deviceId: device.id, ports: device.ports ?? [] };
+}
+
+// =============================================================================
+// Command Factory
+// =============================================================================
+
+/**
+ * Creates a mock Command for testing history/undo-redo.
+ * Execute and undo are vi.fn() mocks for assertion.
+ */
+export function createMockCommand(
+  description: string,
+  type: CommandType = "PLACE_DEVICE",
+): Command & {
+  execute: Mock<() => void>;
+  undo: Mock<() => void>;
+} {
+  const execute = vi.fn<() => void>();
+  const undo = vi.fn<() => void>();
+  return {
+    type,
+    description,
+    timestamp: Date.now(),
+    execute,
+    undo,
+  };
+}
+
+// =============================================================================
+// Layout Factory
+// =============================================================================
+
+/**
+ * Creates default LayoutSettings.
+ */
+export function createTestLayoutSettings(
+  overrides: Partial<LayoutSettings> = {},
+): LayoutSettings {
+  return {
+    display_mode: "label",
+    show_labels_on_images: false,
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a complete test Layout.
+ */
+export function createTestLayout(overrides: Partial<Layout> = {}): Layout {
+  return {
+    version: "1.0",
+    name: "Test Layout",
+    racks: overrides.racks ?? [createTestRack()],
+    device_types: [],
+    settings: createTestLayoutSettings(),
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// Container/Slot Factories (v0.6.0)
+// =============================================================================
+
+/**
+ * Creates a test Slot for container devices.
+ */
+export function createTestSlot(overrides: Partial<Slot> = {}): Slot {
+  return {
+    id: overrides.id ?? "slot-1",
+    position: overrides.position ?? { row: 0, col: 0 },
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a DeviceType that is a container (has slots).
+ * Containers can hold child PlacedDevices.
+ *
+ * @example
+ * // Simple 2U blade chassis with 2 half-width slots
+ * const chassis = createTestContainerType();
+ *
+ * // Custom container with server-only slots
+ * const serverChassis = createTestContainerType({
+ *   slug: 'blade-chassis-16',
+ *   u_height: 4,
+ *   slots: [
+ *     createTestSlot({ id: 'bay-1', position: { row: 0, col: 0 } }),
+ *     createTestSlot({ id: 'bay-2', position: { row: 0, col: 1 } }),
+ *   ],
+ * });
+ */
+export function createTestContainerType(
+  overrides: Partial<DeviceType> = {},
+): DeviceType {
+  const defaultSlots: Slot[] = [
+    createTestSlot({
+      id: "slot-left",
+      position: { row: 0, col: 0 },
+      width_fraction: 0.5,
+    }),
+    createTestSlot({
+      id: "slot-right",
+      position: { row: 0, col: 1 },
+      width_fraction: 0.5,
+    }),
+  ];
+
+  return {
+    slug: overrides.slug ?? "test-container",
+    u_height: overrides.u_height ?? 2,
+    model: overrides.model ?? "Test Container",
+    category: overrides.category ?? "server",
+    colour: overrides.colour ?? "#8B4513",
+    slots: overrides.slots ?? defaultSlots,
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a PlacedDevice that is a child of a container.
+ *
+ * @example
+ * const container = createTestDevice({ id: 'container-1' });
+ * const child = createTestContainerChild({
+ *   container_id: 'container-1',
+ *   slot_id: 'slot-left',
+ * });
+ */
+export function createTestContainerChild(
+  overrides: Partial<PlacedDevice> & { container_id: string; slot_id: string },
+): PlacedDevice {
+  return {
+    id: overrides.id ?? generateId(),
+    device_type: overrides.device_type ?? "test-device",
+    position: overrides.position ?? 0, // 0-indexed relative position in container
+    face: overrides.face ?? "front",
+    ports: overrides.ports ?? [],
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// Store Setup Helpers
+// =============================================================================
+
+/**
+ * Helper to set up a store with a rack and a placed device.
+ * Returns the store, rack ID, and device slug for test assertions.
+ */
+export function setupStoreWithDevice() {
+  const store = getLayoutStore();
+  if (!store) {
+    throw new Error("setupStoreWithDevice: getLayoutStore() returned null");
+  }
+
+  const rack = store.addRack("Test Rack", 42);
+  if (!rack) {
+    throw new Error("setupStoreWithDevice: addRack() failed to create rack");
+  }
+
+  const deviceType = createTestDeviceType({
+    slug: "generic-server",
+    model: "Generic Server",
+    u_height: 2,
+    category: "server",
+    colour: "#4A90D9",
+  });
+  store.addDeviceTypeRaw(deviceType);
+
+  const placed = store.placeDevice(rack.id, deviceType.slug, 5);
+  if (!placed) {
+    throw new Error(
+      `setupStoreWithDevice: placeDevice() failed for rack ${rack.id}, device ${deviceType.slug}`,
+    );
+  }
+
+  return { store, rackId: rack.id, deviceSlug: deviceType.slug };
+}
+
+/**
+ * Helper to set up a store with just a rack (no devices).
+ * Use this when tests need a rack but don't need pre-placed devices.
+ * Returns the store and rack for test assertions.
+ */
+export function setupStoreWithRack(height: number = 42): {
+  store: ReturnType<typeof getLayoutStore>;
+  rack: Rack & { id: string };
+} {
+  const store = getLayoutStore();
+  if (!store) {
+    throw new Error("setupStoreWithRack: getLayoutStore() returned null");
+  }
+
+  const rack = store.addRack("Test Rack", height);
+  if (!rack) {
+    throw new Error("setupStoreWithRack: addRack() failed to create rack");
+  }
+
+  return { store, rack };
+}
+
+// =============================================================================
+// Layout Store Factory
+// =============================================================================
+
+export interface CreateTestLayoutStoreOptions {
+  /**
+   * Optional layout name to pre-set on the freshly-reset store.
+   * When omitted, the default name from createLayout() ("My Layout") is used.
+   */
+  layoutName?: string;
+}
+
+/**
+ * Reset the singleton layout store and (optionally) seed it with a layout name.
+ * Also resets the history store so undo/redo tests start clean.
+ *
+ * Use this when a test needs a known, named layout without any racks yet
+ * (e.g., verifying that the first rack creation syncs `layout.name`).
+ *
+ * @example
+ * const store = createTestLayoutStore({ layoutName: "My Lab" });
+ * store.addRack("Server Rack A", 42);
+ * expect(store.layout.name).toBe("Server Rack A");
+ */
+export function createTestLayoutStore(
+  options: CreateTestLayoutStoreOptions = {},
+) {
+  resetLayoutStore();
+  resetHistoryStore();
+  const store = getLayoutStore();
+  if (!store) {
+    throw new Error("createTestLayoutStore: getLayoutStore() returned null");
+  }
+  if (options.layoutName !== undefined) {
+    store.setLayoutName(options.layoutName);
+  }
+  return store;
+}
+
+/**
+ * Seed the layout store with a 4U blade chassis (two half-width slots) holding
+ * one child device in the left slot, placed at U5 in a fresh rack. Mirrors the
+ * repeated contained-device setup in keyboard.test.ts so guard tests only
+ * declare the selection, key press, and assertions.
+ *
+ * @returns the rack id, container and child device ids, and the child's
+ *   container-relative position captured at setup (for no-op assertions).
+ */
+export function createBladeContainerWithChild(): {
+  rackId: string;
+  containerId: string;
+  childId: string;
+  childPosition: number;
+} {
+  const store = getLayoutStore();
+  if (!store) {
+    throw new Error(
+      "createBladeContainerWithChild: getLayoutStore() returned null",
+    );
+  }
+
+  const containerType = store.addDeviceType({
+    name: "Blade Chassis",
+    u_height: 4,
+    category: "server",
+    colour: CATEGORY_COLOURS.server,
+    slots: [
+      {
+        id: "slot-left",
+        name: "Left",
+        position: { row: 0, col: 0 },
+        width_fraction: 0.5,
+      },
+      {
+        id: "slot-right",
+        name: "Right",
+        position: { row: 0, col: 1 },
+        width_fraction: 0.5,
+      },
+    ],
+  });
+  const childType = store.addDeviceType({
+    name: "Blade Server",
+    u_height: 1,
+    category: "server",
+    colour: CATEGORY_COLOURS.server,
+    slot_width: 1, // half-width, to fit the chassis's half-width slots
+  });
+
+  const rack = store.addRack("Test Rack", 42);
+  const rackId = rack!.id;
+
+  store.placeDevice(rackId, containerType.slug, 5);
+  const containerDevice = store.rack!.devices.find(
+    (d) => d.device_type === containerType.slug,
+  )!;
+
+  store.placeInContainer(
+    rackId,
+    childType.slug,
+    containerDevice.id,
+    "slot-left",
+    0,
+  );
+
+  const childDevice = store.rack!.devices.find(
+    (d) => d.container_id === containerDevice.id,
+  )!;
+
+  return {
+    rackId,
+    containerId: containerDevice.id,
+    childId: childDevice.id,
+    childPosition: childDevice.position,
+  };
+}
+
+// =============================================================================
+// Browser Workspace / Storage Factories (#2988)
+// =============================================================================
+
+/**
+ * Creates a test LibraryEntry (browser workspace per-layout durability
+ * record, $lib/storage/browser-workspace.ts).
+ */
+export function createTestLibraryEntry(
+  overrides: Partial<LibraryEntry> = {},
+): LibraryEntry {
+  return {
+    name: "Test layout",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    changesSinceExport: 0,
+    hasEverExported: true,
+    lastExportedAt: null,
+    writeFailed: false,
+    storageMode: "browser",
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a test BrowserLaunch in the "empty" state (resolveBrowserLaunch()'s
+ * no-open-tabs branch).
+ */
+export function createTestEmptyBrowserLaunch(
+  overrides: Partial<Extract<BrowserLaunch, { action: "empty" }>> = {},
+): BrowserLaunch {
+  return {
+    action: "empty",
+    everHadLayouts: false,
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a test BrowserLaunch in the "restore" state, with a single-tab
+ * WorkspaceIndex by default. `loadBody` is a fresh vi.fn() per call so each
+ * test gets its own spy.
+ */
+export function createTestRestoreBrowserLaunch(
+  overrides: Partial<Extract<BrowserLaunch, { action: "restore" }>> = {},
+): BrowserLaunch {
+  return {
+    action: "restore",
+    index: {
+      schemaVersion: 2,
+      activeId: "layout-1",
+      openTabs: ["layout-1"],
+      library: { "layout-1": createTestLibraryEntry() },
+    },
+    loadBody: vi.fn(),
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// Layouts Catalogue Factories (#3151)
+// =============================================================================
+
+/**
+ * Creates a test SavedLayoutItem: one row of the server catalogue as
+ * GET /api/layouts returns it.
+ */
+export function createTestSavedLayoutItem(
+  overrides: Partial<SavedLayoutItem> = {},
+): SavedLayoutItem {
+  return {
+    id: "srv-1",
+    name: "Closet Rack",
+    version: "26.7.0",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    rackCount: 1,
+    deviceCount: 2,
+    valid: true,
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a test CatalogueEntry: the shape the Layouts panel and the mobile
+ * sheet feed into buildLayoutRows, from either the server catalogue or the
+ * browser workspace library. Counts and validity are optional in the type
+ * (the browser library knows neither), so pass them only where the test needs
+ * them.
+ */
+export function createTestCatalogueEntry(
+  overrides: Partial<CatalogueEntry> = {},
+): CatalogueEntry {
+  return {
+    id: "layout-1",
+    name: "Test layout",
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// Dialog Delete-Target Factory
+// =============================================================================
+
+/**
+ * Creates a test DeleteTarget (dialogStore.deleteTarget) with sensible
+ * defaults for the standalone-rack case. Pass `groupRackIds` to simulate the
+ * whole-bayed-group delete snapshot, including malformed/stale snapshots
+ * (e.g. a rackId or groupRackIds member that no longer resolves to a live
+ * rack or group) used to exercise handleConfirmDelete's failure guards.
+ */
+export function createTestRackDeleteTarget(
+  overrides: Partial<DeleteTarget> = {},
+): DeleteTarget {
+  return {
+    type: "rack",
+    name: "Test Rack",
+    rackId: "rack-1",
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/**
+ * Common test constants matching production values.
+ * Import these instead of hardcoding values in tests.
+ */
+export const TEST_CONSTANTS = {
+  /** Height of one rack unit in pixels */
+  U_HEIGHT: 22,
+  /** Padding around rack content */
+  RACK_PADDING: 4,
+  /** Width of mounting rails */
+  RAIL_WIDTH: 17,
+  /** Standard rack widths */
+  RACK_WIDTH_10: 110,
+  RACK_WIDTH_19: 220,
+} as const;

@@ -1,0 +1,1429 @@
+import { describe, it, expect } from "vitest";
+import {
+  adaptLegacyLayout,
+  CARRIER_2COL_SLUG,
+  CARRIER_2X2_SLUG,
+} from "$lib/storage";
+import { LayoutSchema } from "$lib/schemas";
+import { CARRIER_2U_2COL_SLUG } from "$lib/storage/adapt-legacy-layout";
+import { toInternalUnits } from "$lib/utils/position";
+import { UNITS_PER_U } from "$lib/types/constants";
+import { encodeLayout, decodeLayout } from "$lib/utils/share";
+import {
+  createTestConnection,
+  createTestContainerChild,
+  createTestContainerType,
+  createTestDevice,
+  createTestDeviceType,
+  createTestLayout,
+  createTestPlacedPort,
+  createTestRack,
+} from "./factories";
+import type { Layout, PlacedDevice } from "$lib/types";
+
+/** All rack-level devices across all racks (no container_id). */
+function rackLevel(layout: Layout): PlacedDevice[] {
+  return layout.racks.flatMap((r) =>
+    r.devices.filter((d) => d.container_id === undefined),
+  );
+}
+
+/** All container-child devices across all racks (container_id set). */
+function children(layout: Layout): PlacedDevice[] {
+  return layout.racks.flatMap((r) =>
+    r.devices.filter((d) => d.container_id !== undefined),
+  );
+}
+
+describe("adaptLegacyLayout", () => {
+  describe("fractional rail snapping", () => {
+    it("snaps a device at a fractional rail position to the nearest whole U", () => {
+      const dt = createTestDeviceType({ slug: "rb-1u", u_height: 1 });
+      const layout = createTestLayout({
+        device_types: [dt],
+        racks: [
+          createTestRack({
+            devices: [
+              // U5 1/3 == 5.333U == 32 internal units (not a multiple of 6)
+              createTestDevice({
+                id: "frac",
+                device_type: "rb-1u",
+                position: 32 / UNITS_PER_U, // factory re-applies toInternalUnits
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      const device = rackLevel(adapted).find((d) => d.id === "frac");
+      // 32 internal -> round(32/6)=5 -> 30 internal == U5
+      expect(device?.position).toBe(toInternalUnits(5));
+    });
+
+    it("leaves a whole-U rail position unchanged", () => {
+      const dt = createTestDeviceType({ slug: "srv-2u", u_height: 2 });
+      const layout = createTestLayout({
+        device_types: [dt],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "whole",
+                device_type: "srv-2u",
+                position: 10, // U10
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      const device = rackLevel(adapted).find((d) => d.id === "whole");
+      expect(device?.position).toBe(toInternalUnits(10));
+    });
+  });
+
+  describe("empty-string container_id (#2759)", () => {
+    it("treats a rack-level device with an empty-string container_id as rack-level, snapping its fractional rail position", () => {
+      // A prior-release rack-level device can serialize container_id as ""
+      // (matching the class of bug fixed for the schema/storage position
+      // migration in #2699/#2756/#2931). isRackLevel's strict
+      // `=== undefined` check would misclassify this device as a container
+      // child, sending it to passthrough and skipping the fractional snap
+      // that every other rack-level device gets.
+      const dt = createTestDeviceType({ slug: "rb-1u-empty-cid", u_height: 1 });
+      const layout = createTestLayout({
+        device_types: [dt],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "frac-empty-cid",
+                device_type: "rb-1u-empty-cid",
+                position: 32 / UNITS_PER_U, // factory re-applies toInternalUnits
+                container_id: "",
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      const device = adapted.racks[0]!.devices.find(
+        (d) => d.id === "frac-empty-cid",
+      );
+      // Same snap as a rack-level device without container_id: round(32/6)=5 -> 30 internal == U5.
+      expect(device?.position).toBe(toInternalUnits(5));
+    });
+  });
+
+  describe("half-width pair wrapping (legacy slot_position)", () => {
+    it("wraps two co-located half-width devices into a carrier-1u-2col with two children", () => {
+      const half = createTestDeviceType({
+        slug: "half-width",
+        u_height: 1,
+        slot_width: 1,
+      });
+      const layout = createTestLayout({
+        device_types: [half],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "left-dev",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "left",
+              }),
+              createTestDevice({
+                id: "right-dev",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "right",
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+
+      // The two half-width devices are no longer rack-level placements.
+      const carriers = rackLevel(adapted).filter(
+        (d) => d.device_type === CARRIER_2COL_SLUG,
+      );
+      // eslint-disable-next-line no-restricted-syntax -- one synthesized carrier wraps the pair
+      expect(carriers).toHaveLength(1);
+      const carrier = carriers[0]!;
+      expect(carrier.auto_created).toBe(true);
+      expect(carrier.position).toBe(toInternalUnits(10));
+
+      const kids = children(adapted);
+      // eslint-disable-next-line no-restricted-syntax -- the pair becomes exactly two children
+      expect(kids).toHaveLength(2);
+      // Both children belong to the carrier and reference distinct slots.
+      // The legacy slot_position marker is dropped: children are located by
+      // slot_id alone in the carrier-first model.
+      for (const kid of kids) {
+        expect(kid.container_id).toBe(carrier.id);
+        expect(kid.device_type).toBe("half-width");
+        expect("slot_position" in kid).toBe(false);
+      }
+      const slotIds = kids.map((k) => k.slot_id);
+      expect(slotIds).toContain("col-1");
+      expect(slotIds).toContain("col-2");
+
+      // The carrier device type was injected into device_types.
+      expect(
+        adapted.device_types.some((t) => t.slug === CARRIER_2COL_SLUG),
+      ).toBe(true);
+    });
+
+    it("wraps a bare co-located pair (slot_position and slot_width both stripped) into a carrier", () => {
+      // The dd25f4c serializer (#1248/#1602) dropped both slot_position and
+      // slot_width. Two co-located rack-level devices with neither field is an
+      // unambiguous half-width pair and must still become a carrier.
+      const stripped = createTestDeviceType({
+        slug: "stripped-half",
+        u_height: 1,
+        // slot_width intentionally omitted (stripped by the broken serializer)
+      });
+      const layout = createTestLayout({
+        device_types: [stripped],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "p1",
+                device_type: "stripped-half",
+                position: 10,
+              }),
+              createTestDevice({
+                id: "p2",
+                device_type: "stripped-half",
+                position: 10,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      const carriers = rackLevel(adapted).filter((d) => d.auto_created);
+      // eslint-disable-next-line no-restricted-syntax -- a bare pair recovers to exactly one carrier
+      expect(carriers).toHaveLength(1);
+      expect(carriers[0]?.device_type).toBe(CARRIER_2COL_SLUG);
+      // eslint-disable-next-line no-restricted-syntax -- both devices become children, none lost
+      expect(children(adapted)).toHaveLength(2);
+    });
+
+    it("spills more than two co-located half-width devices across multiple carriers without dropping any", () => {
+      const half = createTestDeviceType({
+        slug: "half-width",
+        u_height: 1,
+        slot_width: 1,
+      });
+      const layout = createTestLayout({
+        device_types: [half],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "h1",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "left",
+              }),
+              createTestDevice({
+                id: "h2",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "right",
+              }),
+              createTestDevice({
+                id: "h3",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "left",
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      // Three half-width devices, two slots per carrier: two carriers, no loss.
+      const carriers = rackLevel(adapted).filter((d) => d.auto_created);
+      // eslint-disable-next-line no-restricted-syntax -- 3 devices / 2 slots = 2 carriers
+      expect(carriers).toHaveLength(2);
+      // eslint-disable-next-line no-restricted-syntax -- every device survives as a child
+      expect(children(adapted)).toHaveLength(3);
+    });
+
+    it("does not pair devices on different faces", () => {
+      const half = createTestDeviceType({
+        slug: "half-width",
+        u_height: 1,
+        slot_width: 1,
+      });
+      const layout = createTestLayout({
+        device_types: [half],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "front-half",
+                device_type: "half-width",
+                position: 10,
+                face: "front",
+              }),
+              createTestDevice({
+                id: "rear-half",
+                device_type: "half-width",
+                position: 10,
+                face: "rear",
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      // Two separate carriers (one per face), each with one child.
+      const carriers = rackLevel(adapted).filter((d) => d.auto_created);
+      // eslint-disable-next-line no-restricted-syntax -- a front and a rear carrier, not a pair
+      expect(carriers).toHaveLength(2);
+    });
+
+    it("wraps a legacy 2U half-width device into a height-matched carrier", () => {
+      const twoUHalf = createTestDeviceType({
+        slug: "two-u-half",
+        u_height: 2,
+        slot_width: 1,
+      });
+      const layout = createTestLayout({
+        device_types: [twoUHalf],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "two-u-dev",
+                device_type: "two-u-half",
+                position: 10,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      const carrier = rackLevel(adapted).find((d) => d.auto_created);
+      expect(carrier?.device_type).toBe(CARRIER_2U_2COL_SLUG);
+      expect(carrier?.position).toBe(toInternalUnits(10));
+
+      const child = children(adapted).find((d) => d.id === "two-u-dev");
+      expect(child?.container_id).toBe(carrier?.id);
+      expect(child?.slot_id).toBe("col-1");
+      expect(
+        adapted.device_types.some(
+          (t) => t.slug === CARRIER_2U_2COL_SLUG && (t.slots?.length ?? 0) > 0,
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("sub-U single wrapping", () => {
+    it("wraps a half-height device into a carrier-1u-2x2", () => {
+      const subU = createTestDeviceType({
+        slug: "tiny",
+        u_height: 0.5,
+        slot_width: 1,
+      });
+      const layout = createTestLayout({
+        device_types: [subU],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "tiny-dev",
+                device_type: "tiny",
+                position: 12,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      const carrier = rackLevel(adapted).find((d) => d.auto_created);
+      expect(carrier?.device_type).toBe(CARRIER_2X2_SLUG);
+      expect(carrier?.position).toBe(toInternalUnits(12));
+
+      const kids = children(adapted);
+      // eslint-disable-next-line no-restricted-syntax -- single sub-U device yields one child
+      expect(kids).toHaveLength(1);
+      expect(kids[0]?.container_id).toBe(carrier?.id);
+      expect(kids[0]?.slot_id).toBeDefined();
+    });
+  });
+
+  describe("idempotency", () => {
+    it("is a no-op for a layout that is already carrier-first", () => {
+      const half = createTestDeviceType({
+        slug: "half-width",
+        u_height: 1,
+        slot_width: 1,
+      });
+      const layout = createTestLayout({
+        device_types: [half],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "left-dev",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "left",
+              }),
+              createTestDevice({
+                id: "right-dev",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "right",
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const once = adaptLegacyLayout(layout);
+      const twice = adaptLegacyLayout(once);
+
+      expect(rackLevel(twice)).toEqual(rackLevel(once));
+      expect(children(twice)).toEqual(children(once));
+    });
+
+    it("leaves an all-whole-U full-width layout untouched", () => {
+      const dt = createTestDeviceType({ slug: "srv-2u", u_height: 2 });
+      const layout = createTestLayout({
+        device_types: [dt],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "a",
+                device_type: "srv-2u",
+                position: 5,
+              }),
+              createTestDevice({
+                id: "b",
+                device_type: "srv-2u",
+                position: 20,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      // No carriers synthesized for a clean full-width whole-U layout.
+      expect(children(adapted).length).toBe(0);
+      expect(
+        rackLevel(adapted)
+          .map((d) => d.id)
+          .sort(),
+      ).toEqual(["a", "b"]);
+    });
+  });
+
+  describe("idempotency", () => {
+    it("does not re-wrap overflow carriers on a second run", () => {
+      // Three co-located half-width devices spill into two carriers. Those two
+      // carriers share a (position, face); a second adapter run must not treat
+      // them as a bare co-located pair and wrap them again.
+      const half = createTestDeviceType({
+        slug: "half-width",
+        u_height: 1,
+        slot_width: 1,
+      });
+      const layout = createTestLayout({
+        device_types: [half],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "h1",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "left",
+              }),
+              createTestDevice({
+                id: "h2",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "right",
+              }),
+              createTestDevice({
+                id: "h3",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "left",
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const once = adaptLegacyLayout(layout);
+      const twice = adaptLegacyLayout(once);
+      // Carrier and child counts are stable; no nesting introduced.
+      expect(rackLevel(twice).filter((d) => d.auto_created).length).toBe(
+        rackLevel(once).filter((d) => d.auto_created).length,
+      );
+      expect(children(twice).length).toBe(children(once).length);
+    });
+  });
+
+  describe("left/right ordering", () => {
+    it("places an explicit left device in col-1 and right in col-2 regardless of input order", () => {
+      const half = createTestDeviceType({
+        slug: "half-width",
+        u_height: 1,
+        slot_width: 1,
+      });
+      const layout = createTestLayout({
+        device_types: [half],
+        racks: [
+          createTestRack({
+            devices: [
+              // Right listed first to prove ordering is by slot_position, not index.
+              createTestDevice({
+                id: "right-dev",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "right",
+              }),
+              createTestDevice({
+                id: "left-dev",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "left",
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      const kids = children(adapted);
+      const leftKid = kids.find((k) => k.id === "left-dev");
+      const rightKid = kids.find((k) => k.id === "right-dev");
+      expect(leftKid?.slot_id).toBe("col-1");
+      expect(rightKid?.slot_id).toBe("col-2");
+    });
+  });
+
+  describe("defensive handling", () => {
+    it("returns a safe empty-rack layout when racks is missing or malformed", () => {
+      // Untrusted decode/restore paths can hand a structurally-odd object.
+      // loadLayout maps over racks immediately, so racks must always be an array.
+      const bogus = { name: "x", device_types: [] } as unknown as Layout;
+      const adapted = adaptLegacyLayout(bogus);
+      expect(Array.isArray(adapted.racks)).toBe(true);
+    });
+
+    it("does not throw on a null device entry in a rack", () => {
+      const dt = createTestDeviceType({ slug: "srv", u_height: 1 });
+      const layout = createTestLayout({
+        device_types: [dt],
+        racks: [
+          createTestRack({
+            devices: [
+              null as unknown as PlacedDevice,
+              createTestDevice({ id: "ok", device_type: "srv", position: 5 }),
+            ],
+          }),
+        ],
+      });
+      expect(() => adaptLegacyLayout(layout)).not.toThrow();
+    });
+  });
+
+  describe("golden-corpus round trip through share", () => {
+    it("adapts a mixed legacy layout, survives encode/decode, and re-adapts stably", () => {
+      const half = createTestDeviceType({
+        slug: "half-width",
+        u_height: 1,
+        slot_width: 1,
+      });
+      const subU = createTestDeviceType({
+        slug: "tiny",
+        u_height: 0.5,
+        slot_width: 1,
+      });
+      const full = createTestDeviceType({ slug: "srv-2u", u_height: 2 });
+
+      const legacy = createTestLayout({
+        device_types: [half, subU, full],
+        racks: [
+          createTestRack({
+            id: "rack-0",
+            devices: [
+              // half-width pair -> carrier-1u-2col
+              createTestDevice({
+                id: "l",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "left",
+              }),
+              createTestDevice({
+                id: "r",
+                device_type: "half-width",
+                position: 10,
+                slot_position: "right",
+              }),
+              // sub-U single -> carrier-1u-2x2
+              createTestDevice({
+                id: "t",
+                device_type: "tiny",
+                position: 20,
+              }),
+              // full-width whole-U stays on rails
+              createTestDevice({
+                id: "s",
+                device_type: "srv-2u",
+                position: 30,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(legacy);
+
+      // Encode -> decode -> re-adapt (decode is not full-schema validated, so
+      // it runs through the adapter on real ingress).
+      const encoded = encodeLayout(adapted);
+      expect(encoded).not.toBeNull();
+      const decoded = decodeLayout(encoded!).layout;
+      expect(decoded).not.toBeNull();
+      const reAdapted = adaptLegacyLayout(decoded!);
+
+      // No data loss: every wrapped device survives as a carrier child, the
+      // full-width device stays on the rails, and the carrier count is stable.
+      const kids = children(reAdapted);
+      const carriers = rackLevel(reAdapted).filter((d) => d.auto_created);
+      const railDevices = rackLevel(reAdapted).filter((d) => !d.auto_created);
+
+      const childTypes = kids.map((k) => k.device_type).sort();
+      expect(childTypes).toEqual(["half-width", "half-width", "tiny"]);
+
+      const carrierTypes = carriers.map((c) => c.device_type).sort();
+      expect(carrierTypes).toEqual([CARRIER_2COL_SLUG, CARRIER_2X2_SLUG]);
+
+      const railTypes = railDevices.map((d) => d.device_type);
+      expect(railTypes).toEqual(["srv-2u"]);
+
+      // The decoded carrier device types must carry their slot grid so children
+      // resolve to real slots (share links do not encode the slot grid; the
+      // adapter rehydrates it from the starter library).
+      for (const slug of [CARRIER_2COL_SLUG, CARRIER_2X2_SLUG]) {
+        const carrierType = reAdapted.device_types.find((t) => t.slug === slug);
+        expect(carrierType?.slots?.length ?? 0).toBeGreaterThan(0);
+      }
+    });
+
+    it("rehydrates a carrier type that lost its slot grid in transit", () => {
+      // Simulate a decoded share link: a carrier placement plus a child, but the
+      // carrier device type arrives with no slots.
+      const child = createTestDeviceType({ slug: "half-width", u_height: 1 });
+      const slotlessCarrier = createTestDeviceType({
+        slug: CARRIER_2COL_SLUG,
+        u_height: 1,
+        // slots intentionally absent (not encoded in the share format)
+      });
+      const layout = createTestLayout({
+        device_types: [slotlessCarrier, child],
+        racks: [
+          createTestRack({
+            devices: [
+              createTestDevice({
+                id: "carrier",
+                device_type: CARRIER_2COL_SLUG,
+                position: 10,
+                auto_created: true,
+              }),
+              {
+                id: "kid",
+                device_type: "half-width",
+                position: 0,
+                face: "front",
+                container_id: "carrier",
+                slot_id: "col-1",
+              },
+            ],
+          }),
+        ],
+      });
+
+      const adapted = adaptLegacyLayout(layout);
+      const carrierType = adapted.device_types.find(
+        (t) => t.slug === CARRIER_2COL_SLUG,
+      );
+      expect(carrierType?.slots?.length ?? 0).toBeGreaterThan(0);
+    });
+
+    it("round-trips a user-placed (non-auto-created) container's children through share", () => {
+      // A user-placed shelf is a container whose children are NOT auto_created.
+      // Share decode must still restore the parent linkage (not gate on the
+      // auto_created flag), or the children collapse to rack-level placements.
+      const shelf = createTestContainerType({
+        slug: "shelf-2bay",
+        u_height: 1,
+        slots: [
+          { id: "bay-1", position: { row: 0, col: 0 }, width_fraction: 0.5 },
+          { id: "bay-2", position: { row: 0, col: 1 }, width_fraction: 0.5 },
+        ],
+      });
+      const gear = createTestDeviceType({ slug: "gear", u_height: 1 });
+      const layout = createTestLayout({
+        device_types: [shelf, gear],
+        racks: [
+          createTestRack({
+            id: "rack-0",
+            devices: [
+              createTestDevice({
+                id: "shelf-1",
+                device_type: "shelf-2bay",
+                position: 5,
+              }),
+              {
+                id: "child-1",
+                device_type: "gear",
+                position: 0,
+                face: "front",
+                container_id: "shelf-1",
+                slot_id: "bay-1",
+              },
+            ],
+          }),
+        ],
+      });
+
+      const encoded = encodeLayout(layout);
+      expect(encoded).not.toBeNull();
+      const decoded = decodeLayout(encoded!).layout;
+      expect(decoded).not.toBeNull();
+
+      const decodedChild = decoded!.racks[0]?.devices.find(
+        (d) => d.device_type === "gear",
+      );
+      // The child stays a child (container linkage preserved), not a rack-level
+      // device whose raw 0-index position got reinterpreted as a rail U.
+      expect(decodedChild?.container_id).toBeDefined();
+      expect(decodedChild?.slot_id).toBe("bay-1");
+
+      // The decoded parent type must still expose the referenced slot, or the
+      // child has nowhere to render. Container slot grids round-trip in share.
+      const decodedShelfType = decoded!.device_types.find(
+        (t) => t.slug === "shelf-2bay",
+      );
+      expect(decodedShelfType?.slots?.some((s) => s.id === "bay-1")).toBe(true);
+    });
+  });
+});
+
+describe("orphaned child salvage (#2911)", () => {
+  /** Every container_id in the layout resolves to a device that exists. */
+  function noDanglingContainers(layout: Layout): boolean {
+    return layout.racks.every((rack) => {
+      const ids = new Set(rack.devices.map((d) => d.id));
+      return rack.devices.every(
+        (d) => !d.container_id || ids.has(d.container_id),
+      );
+    });
+  }
+
+  it("drops a child whose container_id references a removed carrier, keeping the layout schema-valid", () => {
+    const childType = createTestDeviceType({
+      slug: "orphan-gear",
+      u_height: 1,
+    });
+    const layout = createTestLayout({
+      device_types: [childType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestContainerChild({
+              id: "orphan-child",
+              device_type: "orphan-gear",
+              container_id: "carrier-that-no-longer-exists",
+              slot_id: "slot-left",
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(
+      adapted.racks[0]?.devices.find((d) => d.id === "orphan-child"),
+    ).toBeUndefined();
+    expect(noDanglingContainers(adapted)).toBe(true);
+    expect(LayoutSchema.safeParse(adapted).success).toBe(true);
+  });
+
+  it("drops a chained orphan to a fixed point: dropping a container also drops its now-orphaned child", () => {
+    // Two-level corruption: an inner carrier points at a missing outer carrier,
+    // and a grandchild points at the inner carrier. Dropping the inner carrier
+    // orphans the grandchild, so a single pass would leave a dangling reference
+    // and re-fail the whole layout. Iterating to a fixed point clears both.
+    const innerCarrier = createTestContainerType({
+      slug: "inner-carrier",
+      u_height: 1,
+    });
+    const grandchildType = createTestDeviceType({
+      slug: "grandchild-gear",
+      u_height: 1,
+    });
+    const layout = createTestLayout({
+      device_types: [innerCarrier, grandchildType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestContainerChild({
+              id: "inner",
+              device_type: "inner-carrier",
+              container_id: "outer-that-no-longer-exists",
+              slot_id: "slot-left",
+            }),
+            createTestContainerChild({
+              id: "grandchild",
+              device_type: "grandchild-gear",
+              container_id: "inner",
+              slot_id: "slot-left",
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(
+      adapted.racks[0]?.devices.find((d) => d.id === "inner"),
+    ).toBeUndefined();
+    expect(
+      adapted.racks[0]?.devices.find((d) => d.id === "grandchild"),
+    ).toBeUndefined();
+    expect(noDanglingContainers(adapted)).toBe(true);
+    expect(LayoutSchema.safeParse(adapted).success).toBe(true);
+  });
+
+  it("leaves a child whose container still exists in the rack attached", () => {
+    const carrierType = createTestContainerType({
+      slug: "carrier-2col",
+      u_height: 1,
+    });
+    const childType = createTestDeviceType({ slug: "child-gear", u_height: 1 });
+    const layout = createTestLayout({
+      device_types: [carrierType, childType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestDevice({
+              id: "carrier-1",
+              device_type: "carrier-2col",
+              position: 10,
+            }),
+            createTestContainerChild({
+              id: "child-1",
+              device_type: "child-gear",
+              container_id: "carrier-1",
+              slot_id: "slot-left",
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const adapted = adaptLegacyLayout(layout);
+
+    const child = adapted.racks[0]?.devices.find((d) => d.id === "child-1");
+    expect(child?.container_id).toBe("carrier-1");
+  });
+
+  it("treats an empty-string container_id as rack-level and does not detach it", () => {
+    // The rest of the pipeline treats a falsy container_id ("" or undefined) as
+    // rack-level; the salvage must not misread "" as a dangling reference and
+    // strip a legitimate rack-level device's data.
+    const deviceType = createTestDeviceType({ slug: "rack-gear", u_height: 1 });
+    const layout = createTestLayout({
+      device_types: [deviceType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestDevice({
+              id: "rack-level",
+              device_type: "rack-gear",
+              position: 5,
+              container_id: "",
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(
+      adapted.racks[0]?.devices.find((d) => d.id === "rack-level"),
+    ).toBeDefined();
+  });
+});
+
+describe("dangling connection salvage (#3090)", () => {
+  it("drops a connection whose a_port_id references a port that no longer exists", () => {
+    const deviceType = createTestDeviceType({
+      slug: "port-device",
+      u_height: 1,
+    });
+    const portB = createTestPlacedPort({ id: "port-b" });
+    const layout = createTestLayout({
+      device_types: [deviceType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestDevice({
+              id: "device-b",
+              device_type: "port-device",
+              position: 5,
+              ports: [portB],
+            }),
+          ],
+        }),
+      ],
+      connections: [
+        createTestConnection({
+          id: "dangling-conn",
+          a_port_id: "port-that-no-longer-exists",
+          b_port_id: portB.id,
+        }),
+      ],
+    });
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(adapted.connections).toEqual([]);
+  });
+
+  it("drops a connection whose b_port_id references a port that no longer exists", () => {
+    const deviceType = createTestDeviceType({
+      slug: "port-device",
+      u_height: 1,
+    });
+    const portA = createTestPlacedPort({ id: "port-a" });
+    const layout = createTestLayout({
+      device_types: [deviceType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestDevice({
+              id: "device-a",
+              device_type: "port-device",
+              position: 5,
+              ports: [portA],
+            }),
+          ],
+        }),
+      ],
+      connections: [
+        createTestConnection({
+          id: "dangling-conn",
+          a_port_id: portA.id,
+          b_port_id: "port-that-no-longer-exists",
+        }),
+      ],
+    });
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(adapted.connections).toEqual([]);
+  });
+
+  it("keeps a connection whose both ports still exist, leaving it untouched", () => {
+    const deviceType = createTestDeviceType({
+      slug: "port-device",
+      u_height: 1,
+    });
+    const portA = createTestPlacedPort({ id: "port-a" });
+    const portB = createTestPlacedPort({ id: "port-b" });
+    const connection = createTestConnection({
+      id: "valid-conn",
+      a_port_id: portA.id,
+      b_port_id: portB.id,
+    });
+    const layout = createTestLayout({
+      device_types: [deviceType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestDevice({
+              id: "device-a",
+              device_type: "port-device",
+              position: 5,
+              ports: [portA],
+            }),
+            createTestDevice({
+              id: "device-b",
+              device_type: "port-device",
+              position: 10,
+              ports: [portB],
+            }),
+          ],
+        }),
+      ],
+      connections: [connection],
+    });
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(adapted.connections).toEqual([connection]);
+  });
+
+  it("drops only the dangling connection, keeping a valid one alongside it", () => {
+    const deviceType = createTestDeviceType({
+      slug: "port-device",
+      u_height: 1,
+    });
+    const portA = createTestPlacedPort({ id: "port-a" });
+    const portB = createTestPlacedPort({ id: "port-b" });
+    const validConnection = createTestConnection({
+      id: "valid-conn",
+      a_port_id: portA.id,
+      b_port_id: portB.id,
+    });
+    const layout = createTestLayout({
+      device_types: [deviceType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestDevice({
+              id: "device-a",
+              device_type: "port-device",
+              position: 5,
+              ports: [portA],
+            }),
+            createTestDevice({
+              id: "device-b",
+              device_type: "port-device",
+              position: 10,
+              ports: [portB],
+            }),
+          ],
+        }),
+      ],
+      connections: [
+        validConnection,
+        createTestConnection({
+          id: "dangling-conn",
+          a_port_id: portA.id,
+          b_port_id: "port-that-no-longer-exists",
+        }),
+      ],
+    });
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(adapted.connections).toEqual([validConnection]);
+  });
+
+  it("does not trigger the pre-carrier-first backup for a connection-only change", () => {
+    // A connection-only salvage must not be conflated with the carrier-first
+    // migration: the racks/device_types must be returned unchanged (same
+    // devices, no carrier synthesis) even though the layout object itself
+    // changes because a dangling connection was dropped.
+    const deviceType = createTestDeviceType({
+      slug: "port-device",
+      u_height: 1,
+    });
+    const portA = createTestPlacedPort({ id: "port-a" });
+    const layout = createTestLayout({
+      device_types: [deviceType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestDevice({
+              id: "device-a",
+              device_type: "port-device",
+              position: 5,
+              ports: [portA],
+            }),
+          ],
+        }),
+      ],
+      connections: [
+        createTestConnection({
+          id: "dangling-conn",
+          a_port_id: portA.id,
+          b_port_id: "port-that-no-longer-exists",
+        }),
+      ],
+    });
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(adapted.connections).toEqual([]);
+    expect(adapted.racks[0]?.devices).toEqual(layout.racks[0]?.devices);
+    expect(adapted.device_types).toEqual(layout.device_types);
+  });
+
+  it("is a no-op when there are no connections", () => {
+    const layout = createTestLayout();
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(adapted).toBe(layout);
+  });
+
+  it("does not throw when connections is a truthy non-array (malformed/hand-edited input)", () => {
+    // Array.isArray guard, not just truthiness (#3090 review): a crafted
+    // `connections: {}` must degrade gracefully, matching this adapter's
+    // documented never-throw-on-malformed-input contract, rather than
+    // reaching `.filter` and throwing.
+    const layout = {
+      ...createTestLayout(),
+      connections: {},
+    } as unknown as Layout;
+
+    expect(() => adaptLegacyLayout(layout)).not.toThrow();
+  });
+});
+
+describe("legacy cables migration (#3091)", () => {
+  /** Build a layout with two devices, each carrying one named port. */
+  function twoPortedDevices() {
+    const deviceType = createTestDeviceType({
+      slug: "port-device",
+      u_height: 1,
+    });
+    const portA = createTestPlacedPort({
+      id: "port-a",
+      template_name: "eth0",
+      template_index: 0,
+    });
+    const portB = createTestPlacedPort({
+      id: "port-b",
+      template_name: "eth1",
+      template_index: 0,
+    });
+    const layout = createTestLayout({
+      device_types: [deviceType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestDevice({
+              id: "device-a",
+              device_type: "port-device",
+              position: 5,
+              ports: [portA],
+            }),
+            createTestDevice({
+              id: "device-b",
+              device_type: "port-device",
+              position: 10,
+              ports: [portB],
+            }),
+          ],
+        }),
+      ],
+    });
+    return { layout, portA, portB };
+  }
+
+  it("converts a resolvable legacy cable into an equivalent connection", () => {
+    const { layout, portA, portB } = twoPortedDevices();
+    const legacyLayout = {
+      ...layout,
+      cables: [
+        {
+          id: "cable-1",
+          a_device_id: "device-a",
+          a_interface: "eth0",
+          b_device_id: "device-b",
+          b_interface: "eth1",
+          label: "Uplink",
+          color: "#FF5500",
+          // Cable-only metadata with no Connection equivalent; must not
+          // leak onto the migrated connection.
+          type: "cat6a",
+        },
+      ],
+    } as unknown as Layout;
+
+    const adapted = adaptLegacyLayout(legacyLayout);
+
+    // Full array equality (not an exact-length assertion) proves exactly one
+    // cable resolved to exactly one migrated connection with this shape.
+    expect(adapted.connections).toEqual([
+      expect.objectContaining({
+        a_port_id: portA.id,
+        b_port_id: portB.id,
+        label: "Uplink",
+      }),
+    ]);
+    const connection = adapted.connections![0]!;
+    // Not a design-token assertion: verifies the cable's user-supplied color
+    // value carries over onto the migrated connection unchanged.
+    const expectedColor = "#FF5500";
+    expect(connection.color === expectedColor).toBe(true);
+    expect("type" in connection).toBe(false);
+    // The legacy cable id is not reused as the connection id.
+    expect(connection.id).not.toBe("cable-1");
+    // The deprecated field never survives onto the adapted layout.
+    expect((adapted as unknown as { cables?: unknown }).cables).toBeUndefined();
+  });
+
+  it("drops a cable whose device id does not resolve to any placed device", () => {
+    const { layout } = twoPortedDevices();
+    const legacyLayout = {
+      ...layout,
+      cables: [
+        {
+          id: "cable-orphan",
+          a_device_id: "device-that-does-not-exist",
+          a_interface: "eth0",
+          b_device_id: "device-b",
+          b_interface: "eth1",
+        },
+      ],
+    } as unknown as Layout;
+
+    const adapted = adaptLegacyLayout(legacyLayout);
+
+    // No `connections` field existed on the input and nothing resolved, so
+    // the field is correctly left absent rather than synthesized as `[]`
+    // (mirrors dropDanglingConnections' own undefined-in/undefined-out
+    // behaviour when there was never a connections array to begin with).
+    expect(adapted.connections ?? []).toEqual([]);
+  });
+
+  it("drops a cable whose interface name does not match any port on the device", () => {
+    const { layout } = twoPortedDevices();
+    const legacyLayout = {
+      ...layout,
+      cables: [
+        {
+          id: "cable-bad-interface",
+          a_device_id: "device-a",
+          a_interface: "does-not-exist",
+          b_device_id: "device-b",
+          b_interface: "eth1",
+        },
+      ],
+    } as unknown as Layout;
+
+    const adapted = adaptLegacyLayout(legacyLayout);
+
+    expect(adapted.connections ?? []).toEqual([]);
+  });
+
+  it("drops a cable whose two endpoints resolve to the same port (degenerate self-loop)", () => {
+    const { layout } = twoPortedDevices();
+    const legacyLayout = {
+      ...layout,
+      cables: [
+        {
+          id: "cable-self-loop",
+          a_device_id: "device-a",
+          a_interface: "eth0",
+          b_device_id: "device-a",
+          b_interface: "eth0",
+        },
+      ],
+    } as unknown as Layout;
+
+    const adapted = adaptLegacyLayout(legacyLayout);
+
+    expect(adapted.connections ?? []).toEqual([]);
+  });
+
+  it("disambiguates a duplicate interface name on one device to the lowest template_index", () => {
+    // Cable has no template_index of its own; a device with two ports sharing
+    // the same template_name (legal, port-geometry.ts) is a genuinely
+    // ambiguous reference. The migration's documented fallback is the port
+    // declared earliest (lowest template_index).
+    const deviceType = createTestDeviceType({
+      slug: "dup-name-device",
+      u_height: 1,
+    });
+    const firstPort = createTestPlacedPort({
+      id: "port-first",
+      template_name: "SFP+",
+      template_index: 0,
+    });
+    const secondPort = createTestPlacedPort({
+      id: "port-second",
+      template_name: "SFP+",
+      template_index: 1,
+    });
+    const otherType = createTestDeviceType({
+      slug: "port-device",
+      u_height: 1,
+    });
+    const otherPort = createTestPlacedPort({
+      id: "port-other",
+      template_name: "eth0",
+      template_index: 0,
+    });
+    const layout = createTestLayout({
+      device_types: [deviceType, otherType],
+      racks: [
+        createTestRack({
+          id: "rack-0",
+          devices: [
+            createTestDevice({
+              id: "device-dup",
+              device_type: "dup-name-device",
+              position: 5,
+              ports: [secondPort, firstPort],
+            }),
+            createTestDevice({
+              id: "device-other",
+              device_type: "port-device",
+              position: 10,
+              ports: [otherPort],
+            }),
+          ],
+        }),
+      ],
+    });
+    const legacyLayout = {
+      ...layout,
+      cables: [
+        {
+          id: "cable-ambiguous",
+          a_device_id: "device-dup",
+          a_interface: "SFP+",
+          b_device_id: "device-other",
+          b_interface: "eth0",
+        },
+      ],
+    } as unknown as Layout;
+
+    const adapted = adaptLegacyLayout(legacyLayout);
+
+    // Full array equality proves exactly one migrated connection, and that
+    // it resolved to the earliest-declared (lowest template_index) port.
+    expect(adapted.connections).toEqual([
+      expect.objectContaining({
+        a_port_id: firstPort.id,
+        b_port_id: otherPort.id,
+      }),
+    ]);
+  });
+
+  it("merges a migrated cable alongside an existing connection, still salvaging a genuinely dangling one", () => {
+    const { layout, portA, portB } = twoPortedDevices();
+    const handAuthored = createTestConnection({
+      id: "hand-authored",
+      a_port_id: portA.id,
+      b_port_id: portB.id,
+    });
+    const dangling = createTestConnection({
+      id: "dangling",
+      a_port_id: portA.id,
+      b_port_id: "port-that-no-longer-exists",
+    });
+    const legacyLayout = {
+      ...layout,
+      connections: [handAuthored, dangling],
+      cables: [
+        {
+          id: "cable-1",
+          a_device_id: "device-a",
+          a_interface: "eth0",
+          b_device_id: "device-b",
+          b_interface: "eth1",
+        },
+      ],
+    } as unknown as Layout;
+
+    const adapted = adaptLegacyLayout(legacyLayout);
+
+    // Full array equality proves the dangling connection was salvaged away
+    // while the hand-authored connection and the one migrated cable both
+    // survive, in that order.
+    expect(adapted.connections).toEqual([
+      expect.objectContaining({ id: "hand-authored" }),
+      expect.objectContaining({
+        a_port_id: portA.id,
+        b_port_id: portB.id,
+      }),
+    ]);
+  });
+
+  it("is a no-op when there is no legacy cables field", () => {
+    const layout = createTestLayout();
+
+    const adapted = adaptLegacyLayout(layout);
+
+    expect(adapted).toBe(layout);
+  });
+
+  it("does not throw when cables is a truthy non-array (malformed/hand-edited input)", () => {
+    const legacyLayout = {
+      ...createTestLayout(),
+      cables: {},
+    } as unknown as Layout;
+
+    expect(() => adaptLegacyLayout(legacyLayout)).not.toThrow();
+    expect(adaptLegacyLayout(legacyLayout).connections ?? []).toEqual([]);
+  });
+
+  it("does not throw when a migrated cable is merged into a truthy non-array connections field (malformed/hand-edited input)", () => {
+    // Reproduces the crash class #3115 already fixed elsewhere in this file:
+    // `layout.connections ?? []` does not catch a truthy non-array value (it
+    // only substitutes for null/undefined), so spreading a malformed
+    // `connections: {}` alongside a migrated cable used to throw
+    // "TypeError: object is not iterable" instead of salvaging the load.
+    const { layout, portA, portB } = twoPortedDevices();
+    const legacyLayout = {
+      ...layout,
+      connections: {},
+      cables: [
+        {
+          id: "cable-1",
+          a_device_id: "device-a",
+          a_interface: "eth0",
+          b_device_id: "device-b",
+          b_interface: "eth1",
+        },
+      ],
+    } as unknown as Layout;
+
+    expect(() => adaptLegacyLayout(legacyLayout)).not.toThrow();
+
+    const adapted = adaptLegacyLayout(legacyLayout);
+    // The malformed connections field is treated as empty, not crashed on;
+    // the migrated cable still comes through as a real connection.
+    expect(adapted.connections).toEqual([
+      expect.objectContaining({
+        a_port_id: portA.id,
+        b_port_id: portB.id,
+      }),
+    ]);
+  });
+});

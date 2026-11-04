@@ -1,0 +1,793 @@
+/**
+ * Rack Actions Domain Module
+ *
+ * Extracted from layout.svelte.ts — handles rack creation, deletion,
+ * duplication, reordering, and raw mutators for undo/redo.
+ */
+
+import type { FormFactor, Rack, RackGroup } from "$lib/types";
+import { MAX_RACKS } from "$lib/types/constants";
+import { createDefaultRack } from "$lib/utils/serialization";
+import { layoutDebug } from "$lib/utils/debug";
+import { generateId } from "$lib/utils/device";
+import { generateRackId } from "$lib/utils/rack";
+// Rack3D 扩展：复制机柜的名字后缀按当前语言生成
+import { withCopySuffix } from "$lib/i18n/default-names";
+import {
+  createAddRackCommand,
+  createDeleteRackCommand,
+  createRemoveConnectionCommand,
+  createBatchCommand,
+  createCreateRackGroupCommand,
+  type Command,
+  type RackLifecycleCommandStore,
+} from "../commands";
+import type { LayoutStateAccess } from "./types";
+import { getCommandStoreAdapter } from "./command-adapters";
+import { findConnectionsForDevices } from "./recorded-device-type-actions";
+import {
+  buildRowReindexCommands,
+  getRackGroupCommandAdapter,
+  getRackGroupForRack,
+} from "./rack-groups";
+import { setLayoutNamesRaw } from "./mutators";
+import { planBayedInsert, reorderRackRow } from "$lib/utils/rack-row";
+
+/** Recorded single-rack update action injected by the facade. */
+export type UpdateRackRecordedFn = (
+  rackId: string,
+  updates: Partial<Omit<Rack, "devices" | "view">>,
+) => void;
+
+/** Recorded batch rack update action injected by the facade. */
+export type UpdateRacksBatchRecordedFn = (
+  targets: {
+    rackId: string;
+    updates: Partial<Omit<Rack, "devices" | "view">>;
+  }[],
+  description: string,
+) => void;
+
+// =============================================================================
+// Raw Mutators (for undo/redo system — bypass history)
+// =============================================================================
+
+/**
+ * Raw add rack (bypasses history)
+ * @param ctx - Layout state access
+ * @param rack - Rack to add
+ */
+export function addRackRaw(ctx: LayoutStateAccess, rack: Rack): void {
+  const layout = ctx.getLayout();
+  ctx.setLayout({
+    ...layout,
+    racks: [...layout.racks, rack],
+  });
+}
+
+/**
+ * Raw delete rack (bypasses history)
+ * Removes the rack and cleans up group memberships
+ * @param ctx - Layout state access
+ * @param id - Rack ID to delete
+ * @returns The deleted rack, its original index, and affected groups (with original rack_ids), or undefined if not found
+ */
+export function deleteRackRaw(
+  ctx: LayoutStateAccess,
+  id: string,
+): { rack: Rack; index: number; groups: RackGroup[] } | undefined {
+  const layout = ctx.getLayout();
+  const rackIndex = layout.racks.findIndex((r) => r.id === id);
+  if (rackIndex === -1) return undefined;
+  const rack = layout.racks[rackIndex]!;
+
+  // Find groups that contain this rack (capture their state before modification)
+  const affectedGroups = (layout.rack_groups ?? [])
+    .filter((g) => g.rack_ids.includes(id))
+    .map((g) => ({ ...g })); // Shallow copy to preserve rack_ids
+
+  // Remove rack from array
+  const newRacks = layout.racks.filter((r) => r.id !== id);
+
+  // Remove rack from groups and clean up empty groups
+  const newGroups = (layout.rack_groups ?? [])
+    .map((group) => ({
+      ...group,
+      rack_ids: group.rack_ids.filter((rackId) => rackId !== id),
+    }))
+    .filter((group) => group.rack_ids.length > 0);
+
+  ctx.setLayout({
+    ...layout,
+    racks: newRacks,
+    rack_groups: newGroups.length > 0 ? newGroups : undefined,
+  });
+
+  // Update activeRackId if we deleted the active rack
+  if (ctx.getActiveRackId() === id) {
+    ctx.setActiveRackId(newRacks[0]?.id ?? null);
+  }
+
+  return { rack, index: rackIndex, groups: affectedGroups };
+}
+
+/**
+ * Raw restore rack with group memberships (bypasses history)
+ * Used by undo to restore a deleted rack
+ * @param ctx - Layout state access
+ * @param rack - Rack to restore
+ * @param groups - Groups to restore (with original rack_ids including this rack)
+ * @param originalIndex - Original position in the racks array (inserts at that position, or appends if omitted)
+ */
+export function restoreRackRaw(
+  ctx: LayoutStateAccess,
+  rack: Rack,
+  groups: RackGroup[],
+  originalIndex?: number,
+): void {
+  let layout = ctx.getLayout();
+
+  // Insert the rack at its original position (or append if no index given)
+  const racks = [...layout.racks];
+  if (
+    originalIndex !== undefined &&
+    originalIndex >= 0 &&
+    originalIndex <= racks.length
+  ) {
+    racks.splice(originalIndex, 0, rack);
+  } else {
+    racks.push(rack);
+  }
+  layout = {
+    ...layout,
+    racks,
+  };
+  ctx.setLayout(layout);
+
+  // Restore group memberships
+  for (const restoredGroup of groups) {
+    layout = ctx.getLayout();
+    const existingGroup = (layout.rack_groups ?? []).find(
+      (g) => g.id === restoredGroup.id,
+    );
+    if (existingGroup) {
+      // Group still exists, restore the rack_ids
+      ctx.setLayout({
+        ...layout,
+        rack_groups: (layout.rack_groups ?? []).map((g) =>
+          g.id === restoredGroup.id
+            ? { ...g, rack_ids: restoredGroup.rack_ids }
+            : g,
+        ),
+      });
+    } else {
+      // Group was deleted (was empty), recreate it
+      ctx.setLayout({
+        ...layout,
+        rack_groups: [...(layout.rack_groups ?? []), restoredGroup],
+      });
+    }
+  }
+}
+
+/**
+ * Get the command adapter for rack lifecycle operations
+ * @param ctx - Layout state access
+ */
+export function getRackLifecycleCommandAdapter(
+  ctx: LayoutStateAccess,
+): RackLifecycleCommandStore {
+  return {
+    addRackRaw: (rack: Rack) => addRackRaw(ctx, rack),
+    deleteRackRaw: (id: string) => deleteRackRaw(ctx, id),
+    restoreRackRaw: (rack: Rack, groups: RackGroup[], originalIndex?: number) =>
+      restoreRackRaw(ctx, rack, groups, originalIndex),
+    getActiveRackId: () => ctx.getActiveRackId(),
+    setActiveRackId: (id: string | null) => ctx.setActiveRackId(id),
+    setLayoutNamesRaw: (name: string, metadataName: string | undefined) =>
+      setLayoutNamesRaw(ctx, name, metadataName),
+  };
+}
+
+// =============================================================================
+// Getters / Utilities
+// =============================================================================
+
+/**
+ * Get a rack by its ID
+ * @param ctx - Layout state access
+ * @param id - Rack ID to find
+ * @returns The rack or undefined if not found
+ */
+export function getRackById(
+  ctx: LayoutStateAccess,
+  id: string,
+): Rack | undefined {
+  return ctx.findRack(id);
+}
+
+/**
+ * Set the active rack for editing
+ * @param ctx - Layout state access
+ * @param id - Rack ID to make active (null to clear)
+ */
+export function setActiveRack(ctx: LayoutStateAccess, id: string | null): void {
+  if (id === null) {
+    ctx.setActiveRackId(null);
+    return;
+  }
+
+  // Verify the rack exists
+  const rack = ctx.findRack(id);
+  if (rack) {
+    ctx.setActiveRackId(id);
+  }
+}
+
+/**
+ * Get the index of a rack by ID
+ * @param ctx - Layout state access
+ * @param rackId - Rack ID to find
+ * @returns Index in layout.racks or -1 if not found
+ */
+export function getRackIndex(ctx: LayoutStateAccess, rackId: string): number {
+  return ctx.findRackIndex(rackId);
+}
+
+/**
+ * Get the rack to operate on (by ID or active rack)
+ * @param ctx - Layout state access
+ * @param rackId - Optional rack ID (uses active rack if not provided)
+ * @returns Rack and its index, or undefined if not found
+ */
+export function getTargetRack(
+  ctx: LayoutStateAccess,
+  rackId?: string,
+): { rack: Rack; index: number } | undefined {
+  const layout = ctx.getLayout();
+
+  if (rackId) {
+    const index = ctx.findRackIndex(rackId);
+    if (index !== -1) {
+      return { rack: layout.racks[index]!, index };
+    }
+    return undefined;
+  }
+
+  // Use active rack
+  const activeId = ctx.getActiveRackId();
+  if (activeId) {
+    const index = ctx.findRackIndex(activeId);
+    if (index !== -1) {
+      return { rack: layout.racks[index]!, index };
+    }
+  }
+
+  // Fall back to first rack
+  if (layout.racks.length > 0) {
+    return { rack: layout.racks[0]!, index: 0 };
+  }
+
+  return undefined;
+}
+
+// =============================================================================
+// Recorded Actions (use undo/redo)
+// =============================================================================
+
+/**
+ * Add a new rack to the layout
+ *
+ * When this is the **first** rack added to the layout, both `layout.name`
+ * and `layout.metadata.name` are synced to the new rack's name (#1482).
+ * The sync is captured inside the command so undo restores the previous
+ * layout-level names exactly. Subsequent racks do not touch the layout
+ * name; it can still be changed via `setLayoutName` independently.
+ *
+ * Uses undo/redo support via command pattern.
+ *
+ * @param ctx - Layout state access
+ * @param name - Rack name
+ * @param height - Rack height in U
+ * @param width - Rack width in inches (10 or 19)
+ * @param form_factor - Rack form factor
+ * @param desc_units - Whether units are numbered top-down
+ * @param starting_unit - First U number
+ * @param selectionSync - Optional selection-store bridge (#3033, mirroring
+ * duplicateRack's #3003 fix). When provided, the caller's post-create
+ * selection change is folded into this command so undo/redo keep selection
+ * transactionally coherent with activeRackId; without it, the caller must
+ * sync selection itself outside the command/history system.
+ * @returns The created rack object with ID, or null if at max capacity
+ */
+export function addRack(
+  ctx: LayoutStateAccess,
+  name: string,
+  height: number,
+  width?: Rack["width"],
+  form_factor?: FormFactor,
+  desc_units?: boolean,
+  starting_unit?: number,
+  selectionSync?: RackSelectionSync,
+): (Rack & { id: string }) | null {
+  const layout = ctx.getLayout();
+
+  // Check if we can add more racks
+  if (layout.racks.length >= MAX_RACKS) {
+    return null;
+  }
+
+  // Snapshot layout-level names before creating the first rack so that
+  // undo can restore them exactly (#1482).
+  const wasFirstRack = layout.racks.length === 0;
+  const layoutNameSync = wasFirstRack
+    ? {
+        hasMetadata: layout.metadata !== undefined,
+        snapshot: {
+          previousLayoutName: layout.name,
+          previousMetadataName: layout.metadata?.name,
+        },
+      }
+    : undefined;
+
+  const newRack = createDefaultRack(
+    name,
+    height,
+    width ?? 19,
+    form_factor ?? "4-post-cabinet",
+    desc_units ?? false,
+    starting_unit ?? 1,
+    true, // show_rear
+    generateRackId(), // id - pass directly
+  );
+
+  // Use recorded action for undo/redo support
+  // setActive: true ensures redo also restores the active rack selection
+  const history = ctx.getHistory();
+  const adapter = getRackLifecycleCommandAdapter(ctx);
+  // When a caller wants selection to follow this new rack transactionally
+  // (#3033, mirroring #3003), layer the bridge onto the shared adapter for
+  // just this command; other callers of getRackLifecycleCommandAdapter
+  // (duplicateRack, createRackGroup, etc.) are unaffected since
+  // syncSelection stays false.
+  const commandStore: RackLifecycleCommandStore = selectionSync
+    ? {
+        ...adapter,
+        getSelectedRackId: selectionSync.getSelectedRackId,
+        setSelectedRackId: selectionSync.setSelectedRackId,
+      }
+    : adapter;
+  const command = createAddRackCommand(
+    newRack,
+    commandStore,
+    true,
+    layoutNameSync,
+    Boolean(selectionSync),
+  );
+  history.execute(command);
+  ctx.markDirty();
+
+  // Mark as started (user has created a rack)
+  ctx.markStarted();
+
+  return newRack;
+}
+
+/**
+ * Interface for bayed rack group creation result
+ */
+interface BayedGroupResult {
+  /** The created rack group */
+  group: RackGroup;
+  /** The created racks (in order) */
+  racks: Rack[];
+}
+
+/**
+ * Create a bayed rack group (multiple racks side-by-side)
+ * Creates multiple racks and links them in a group for atomic management.
+ *
+ * @param ctx - Layout state access
+ * @param groupName - Name for the group
+ * @param bayCount - Number of bays (2 or 3)
+ * @param height - Height for each rack in U
+ * @param width - Width for each rack in inches
+ * @returns Created group and racks, or null if insufficient capacity
+ */
+export function addBayedRackGroup(
+  ctx: LayoutStateAccess,
+  groupName: string,
+  bayCount: 2 | 3,
+  height: number,
+  width: Rack["width"] = 19,
+): BayedGroupResult | null {
+  const layout = ctx.getLayout();
+
+  // Check capacity
+  if (layout.racks.length + bayCount > MAX_RACKS) {
+    return null;
+  }
+
+  // Create the individual racks
+  const newRacks: Rack[] = [];
+  for (let i = 0; i < bayCount; i++) {
+    const rack = createDefaultRack(
+      `Bay ${i + 1}`,
+      height,
+      width,
+      "4-post-cabinet",
+      false,
+      1,
+      true,
+      generateRackId(),
+    );
+    newRacks.push(rack);
+  }
+
+  // Create the group linking them
+  const group: RackGroup = {
+    id: generateId(),
+    name: groupName,
+    rack_ids: newRacks.map((r) => r.id),
+    layout_preset: "bayed",
+  };
+
+  layoutDebug.state(
+    "addBayedRackGroup: created %d racks for group %s",
+    newRacks.length,
+    groupName,
+  );
+
+  // Use command pattern for undo/redo support
+  // First rack gets setActive: true so redo also restores active rack selection
+  const history = ctx.getHistory();
+  const rackAdapter = getRackLifecycleCommandAdapter(ctx);
+  const groupAdapter = getRackGroupCommandAdapter(ctx);
+
+  const commands: Command[] = [
+    ...newRacks.map((rack, i) =>
+      createAddRackCommand(rack, rackAdapter, i === 0),
+    ),
+    createCreateRackGroupCommand(group, groupAdapter),
+  ];
+  const batch = createBatchCommand(
+    `Create bayed group "${groupName}"`,
+    commands,
+  );
+  history.execute(batch);
+  ctx.markDirty();
+
+  // Mark as started
+  ctx.markStarted();
+
+  layoutDebug.state(
+    "addBayedRackGroup: state updated - activeRackId=%s, isDirty=%s",
+    newRacks[0]!.id,
+    true,
+  );
+
+  return { group, racks: newRacks };
+}
+
+/**
+ * Delete a rack from the layout
+ * Also removes the rack from any groups it belongs to
+ * Uses undo/redo support via command pattern
+ * @param ctx - Layout state access
+ * @param id - Rack ID to delete
+ */
+export function deleteRack(ctx: LayoutStateAccess, id: string): void {
+  const layout = ctx.getLayout();
+  const rack = layout.racks.find((r) => r.id === id);
+  if (!rack) return;
+
+  // Find groups that contain this rack (for undo restoration)
+  const affectedGroups = (layout.rack_groups ?? [])
+    .filter((g) => g.rack_ids.includes(id))
+    .map((g) => JSON.parse(JSON.stringify(g)) as RackGroup);
+
+  // Use recorded action for undo/redo support
+  const history = ctx.getHistory();
+  const adapter = getRackLifecycleCommandAdapter(ctx);
+  const deleteCommand = createDeleteRackCommand(rack, affectedGroups, adapter);
+
+  // Deleting the rack destroys its devices' ports, so remove the connections
+  // that reference them in the same undo step (#3122, same pattern as #639).
+  const connectionAdapter = getCommandStoreAdapter(ctx);
+  const connectionCommands: Command[] = findConnectionsForDevices(
+    ctx,
+    rack.devices.map((device) => ({ rackId: id, device })),
+  ).map((connection) =>
+    createRemoveConnectionCommand(
+      connection,
+      connectionAdapter,
+      `Remove connection ${connection.label ?? connection.id}`,
+    ),
+  );
+
+  const command =
+    connectionCommands.length > 0
+      ? createBatchCommand(deleteCommand.description, [
+          ...connectionCommands,
+          deleteCommand,
+        ])
+      : deleteCommand;
+  history.execute(command);
+  ctx.markDirty();
+}
+
+/**
+ * Reorder racks by moving from one index to another
+ * Updates position field to match new array indices
+ * @param ctx - Layout state access
+ * @param fromIndex - Source index
+ * @param toIndex - Target index
+ */
+export function reorderRacks(
+  ctx: LayoutStateAccess,
+  fromIndex: number,
+  toIndex: number,
+): void {
+  const layout = ctx.getLayout();
+  if (
+    fromIndex < 0 ||
+    fromIndex >= layout.racks.length ||
+    toIndex < 0 ||
+    toIndex >= layout.racks.length ||
+    fromIndex === toIndex
+  ) {
+    return;
+  }
+
+  const newRacks = [...layout.racks];
+  const removed = newRacks.splice(fromIndex, 1)[0]!;
+  newRacks.splice(toIndex, 0, removed);
+
+  // Update position field to match new array indices
+  ctx.setLayout({
+    ...layout,
+    racks: newRacks.map((r, index) => ({ ...r, position: index })),
+  });
+  ctx.markDirty();
+}
+
+/**
+ * Move the row slot containing `rackId` one place left or right within the
+ * canvas row, reindexing Rack.position so the new order persists. A grouped
+ * rack moves its whole group as a unit; groups are never split. Recorded as a
+ * single undoable step. No-op at the row edges or with a single slot.
+ * @param ctx - Layout state access
+ * @param rackId - The selected rack (a grouped rack moves its whole group)
+ * @param direction - "left" swaps with the previous slot, "right" with the next
+ * @param updateRacksBatchRecordedFn - Recorded batch position update (undo/redo)
+ * @returns true when the row order changed
+ */
+export function moveRackInRow(
+  ctx: LayoutStateAccess,
+  rackId: string,
+  direction: "left" | "right",
+  updateRacksBatchRecordedFn: UpdateRacksBatchRecordedFn,
+): boolean {
+  const layout = ctx.getLayout();
+  const assignments = reorderRackRow(
+    layout.racks,
+    layout.rack_groups ?? [],
+    rackId,
+    direction,
+  );
+  if (!assignments) return false;
+
+  updateRacksBatchRecordedFn(
+    assignments.map(({ id, position }) => ({
+      rackId: id,
+      updates: { position },
+    })),
+    "Reorder rack",
+  );
+  return true;
+}
+
+/**
+ * Optional bridge to the UI selection store, passed by a caller that wants
+ * a rack-creating action's post-creation selection change to be
+ * transactionally coherent with activeRackId across undo/redo (#3003 fix
+ * round 1, extended to addRack by #3033). Without it, the action only
+ * manages activeRackId; the caller is responsible for selecting the new
+ * rack itself (and for any undo/redo coherence, which it then cannot get
+ * for free). Shared by addRack and duplicateRack.
+ */
+export interface RackSelectionSync {
+  getSelectedRackId(): string | null;
+  setSelectedRackId(id: string | null): void;
+}
+
+/**
+ * Duplicate a rack with all its devices
+ * Handles container_id references by remapping to new device IDs
+ * @param ctx - Layout state access
+ * @param id - Rack ID to duplicate
+ * @param selectionSync - Optional selection-store bridge (#3003 fix round 1)
+ * @returns The duplicated rack or error message
+ */
+export function duplicateRack(
+  ctx: LayoutStateAccess,
+  id: string,
+  selectionSync?: RackSelectionSync,
+): {
+  error?: string;
+  rack?: Rack & { id: string };
+} {
+  const layout = ctx.getLayout();
+
+  if (layout.racks.length >= MAX_RACKS) {
+    return { error: `Maximum of ${MAX_RACKS} racks allowed` };
+  }
+
+  const sourceRack = layout.racks.find((r) => r.id === id);
+  if (!sourceRack) {
+    return { error: "Rack not found" };
+  }
+
+  const newRackId = generateRackId();
+
+  // Place the copy immediately after its source in row order (#3003)
+  // instead of always appending at the far end of the row, which could land
+  // it well beyond the source and off the right viewport edge. Caveat: the
+  // copy is a standalone rack, never added to the source's bay group, so
+  // when the source is a non-last member of a bayed group, organizeRackRow
+  // still renders the whole group contiguously and the copy lands after the
+  // group, not between the source and its next bay member (documented, not
+  // fixed, by the "non-last bayed member" test in layout-rack-actions.test.ts,
+  // #3003 fix round 1).
+  const rowAssignments = planBayedInsert(
+    layout.racks,
+    layout.rack_groups ?? [],
+    id,
+    newRackId,
+  );
+  const newPosition =
+    rowAssignments?.find((a) => a.id === newRackId)?.position ??
+    layout.racks.length;
+
+  // Build a mapping from old device IDs to new device IDs
+  // This ensures container_id references remain valid
+  const idMap = new Map<string, string>(
+    sourceRack.devices.map((d) => [d.id, generateId()]),
+  );
+
+  // Deep clone to avoid shared references with nested objects (ports, etc.)
+  // Uses JSON round-trip as structuredClone cannot handle Svelte reactive proxies
+  const cloned = JSON.parse(JSON.stringify(sourceRack)) as typeof sourceRack;
+  cloned.id = newRackId;
+  cloned.name = withCopySuffix(sourceRack.name);
+  cloned.position = newPosition;
+  cloned.devices = cloned.devices.map((d) => {
+    const newId = idMap.get(d.id)!;
+    const newContainerId = d.container_id
+      ? idMap.get(d.container_id)
+      : undefined;
+    return { ...d, id: newId, container_id: newContainerId };
+  });
+  const duplicatedRack = cloned;
+
+  // setActive: true ensures redo also restores the active rack selection.
+  // Reindexing the rest of the row (when the source isn't already last) is
+  // folded into the same undo step via a batch, so one undo reverts both.
+  const history = ctx.getHistory();
+  const adapter = getRackLifecycleCommandAdapter(ctx);
+  // When a caller wants selection to follow this duplicate transactionally
+  // (#3003 fix round 1), layer the bridge onto the shared adapter for just
+  // this command; other callers of getRackLifecycleCommandAdapter
+  // (createRackGroup, etc.) are unaffected since syncSelection stays false.
+  const commandStore: RackLifecycleCommandStore = selectionSync
+    ? {
+        ...adapter,
+        getSelectedRackId: selectionSync.getSelectedRackId,
+        setSelectedRackId: selectionSync.setSelectedRackId,
+      }
+    : adapter;
+  const commands: Command[] = [
+    createAddRackCommand(
+      duplicatedRack,
+      commandStore,
+      true,
+      undefined,
+      Boolean(selectionSync),
+    ),
+  ];
+  if (rowAssignments) {
+    commands.push(...buildRowReindexCommands(ctx, rowAssignments));
+  }
+  const command =
+    commands.length > 1
+      ? createBatchCommand(`Duplicate rack "${sourceRack.name}"`, commands)
+      : commands[0]!;
+  history.execute(command);
+  ctx.markDirty();
+
+  return { rack: duplicatedRack };
+}
+
+/**
+ * Update a rack's properties
+ * Uses undo/redo support via the injected recorded actions (except for view
+ * changes, which apply directly without history).
+ * @param ctx - Layout state access
+ * @param id - Rack ID to update
+ * @param updates - Properties to update
+ * @param updateRackRecordedFn - Recorded single-rack update (undo/redo)
+ * @param updateRacksBatchRecordedFn - Recorded batch update (undo/redo)
+ */
+export function updateRack(
+  ctx: LayoutStateAccess,
+  id: string,
+  updates: Partial<Rack>,
+  updateRackRecordedFn: UpdateRackRecordedFn,
+  updateRacksBatchRecordedFn: UpdateRacksBatchRecordedFn,
+): void {
+  const rackIndex = ctx.findRackIndex(id);
+  if (rackIndex === -1) return;
+
+  // Check if height change on bayed rack
+  if (updates.height !== undefined) {
+    const group = getRackGroupForRack(ctx, id);
+    if (group?.layout_preset === "bayed") {
+      layoutDebug.state(
+        "updateRack: rejected height change for bayed rack %s",
+        id,
+      );
+      // Silently reject - UI should show toast
+      return;
+    }
+  }
+
+  // Handle view separately (doesn't need undo/redo)
+  if (updates.view !== undefined) {
+    const layout = ctx.getLayout();
+    ctx.setLayout({
+      ...layout,
+      racks: layout.racks.map((r, i) =>
+        i === rackIndex ? { ...r, view: updates.view } : r,
+      ),
+    });
+    ctx.markDirty();
+  }
+
+  // For other properties, use recorded version for undo/redo support
+  const { view: _view, devices: _devices, ...recordableUpdates } = updates;
+  if (Object.keys(recordableUpdates).length === 0) return;
+
+  // BayedRackView renders one shared U-label column read from racks[0], so
+  // all bays must agree on desc_units / starting_unit. When the change
+  // touches those keys on a member of a bayed group, fold the origin and
+  // every diverging peer into a single batch — one undo reverts the whole
+  // group together (#1520).
+  const numberingKeys = ["desc_units", "starting_unit"] as const;
+  const numberingUpdates: Partial<Omit<Rack, "devices" | "view">> = {};
+  for (const key of numberingKeys) {
+    if (key in recordableUpdates) {
+      numberingUpdates[key] = recordableUpdates[key] as never;
+    }
+  }
+
+  const group =
+    Object.keys(numberingUpdates).length > 0
+      ? getRackGroupForRack(ctx, id)
+      : undefined;
+
+  if (group?.layout_preset === "bayed" && group.rack_ids.length > 1) {
+    // Origin gets the full update; peers only get the numbering keys.
+    const targets: {
+      rackId: string;
+      updates: Partial<Omit<Rack, "devices" | "view">>;
+    }[] = [{ rackId: id, updates: recordableUpdates }];
+    for (const peerId of group.rack_ids) {
+      if (peerId === id) continue;
+      targets.push({ rackId: peerId, updates: numberingUpdates });
+    }
+    updateRacksBatchRecordedFn(targets, "Update bayed rack");
+    return;
+  }
+
+  updateRackRecordedFn(id, recordableUpdates);
+}

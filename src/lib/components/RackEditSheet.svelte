@@ -1,0 +1,576 @@
+<!--
+  RackEditSheet Component
+  Mobile bottom sheet for editing rack properties
+  Feature parity with EditPanel's rack editing section
+-->
+<script lang="ts">
+  import { onDestroy, untrack } from "svelte";
+  import SegmentedControl from "./SegmentedControl.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import SavedIndicator from "./ui/SavedIndicator.svelte";
+  import { getLayoutStore } from "$lib/stores/layout.svelte";
+  import { getCanvasStore } from "$lib/stores/canvas.svelte";
+  import {
+    canResizeRackTo,
+    getConflictDetails,
+    formatConflictMessage,
+  } from "$lib/utils/rack-resize";
+  import { COMMON_RACK_HEIGHTS } from "$lib/types/constants";
+  import type { Rack } from "$lib/types";
+
+  interface Props {
+    rack: Rack;
+    onclose?: () => void;
+  }
+
+  let { rack, onclose }: Props = $props();
+
+  const layoutStore = getLayoutStore();
+  const canvasStore = getCanvasStore();
+
+  // Local state for form fields (synced from rack prop)
+  // Using untrack() to capture initial values - the $effect below handles reactive updates
+  let rackName = $state(untrack(() => rack.name));
+  let rackHeight = $state(untrack(() => rack.height));
+  let rackNotes = $state(untrack(() => rack.notes ?? ""));
+  let resizeError = $state<string | null>(null);
+
+  // Save feedback for the Name field (#3005): height and numbering apply on
+  // click and are visibly reflected immediately (active preset, updated
+  // value); Name commits on blur, so it gets the same "Saved" acknowledgement
+  // used by EditPanelRack's (desktop) Name field rather than reading as
+  // frozen next to them.
+  let rackNameSaved = $state(false);
+  let rackNameSavedTimeout: ReturnType<typeof setTimeout> | undefined;
+
+  onDestroy(() => {
+    if (rackNameSavedTimeout) {
+      clearTimeout(rackNameSavedTimeout);
+      rackNameSavedTimeout = undefined;
+    }
+  });
+
+  // Check if this rack is part of a bayed group
+  const rackGroup = $derived(layoutStore.getRackGroupForRack(rack.id));
+  const isBayedRack = $derived(rackGroup?.layout_preset === "bayed");
+  const bayCount = $derived(rackGroup?.rack_ids.length ?? 1);
+
+  // State for bay count changes
+  let bayCountError = $state<string | null>(null);
+
+  // State for clear rack confirmation
+  let showClearConfirm = $state(false);
+
+  // Device count for clear confirmation
+  const deviceCount = $derived(rack.devices.length);
+
+  // Identity of the currently edited rack, tracked via a plain closure
+  // variable (not $state) so reading it doesn't add a reactive dependency of
+  // its own; it's only ever compared against inside the effect below.
+  let previousRackId: string | null = null;
+
+  // Sync form fields when rack prop changes. This effect also reruns on
+  // every field write to the *currently* edited rack (e.g. right after this
+  // sheet's own Name save, since that updates rack.name), so the Name
+  // Saved-flash flag is only cleared when the rack identity itself changes,
+  // not on every resync (#3005).
+  $effect(() => {
+    rackName = rack.name;
+    rackHeight = rack.height;
+    rackNotes = rack.notes ?? "";
+    resizeError = null;
+
+    if (rack.id !== previousRackId) {
+      previousRackId = rack.id;
+      clearTimeout(rackNameSavedTimeout);
+      rackNameSaved = false;
+    }
+  });
+
+  // Update rack name on blur
+  function handleNameBlur() {
+    if (rackName !== rack.name) {
+      layoutStore.updateRack(rack.id, { name: rackName });
+      clearTimeout(rackNameSavedTimeout);
+      rackNameSaved = true;
+      rackNameSavedTimeout = setTimeout(() => {
+        rackNameSaved = false;
+      }, 2000);
+    }
+  }
+
+  // Update rack name on Enter
+  function handleNameKeydown(event: KeyboardEvent) {
+    if (event.key === "Enter") {
+      (event.target as HTMLInputElement).blur();
+    }
+  }
+
+  // Update rack notes on blur
+  function handleNotesBlur() {
+    const trimmedNotes = rackNotes.trim();
+    const notesToSave = trimmedNotes === "" ? undefined : trimmedNotes;
+    if (notesToSave !== rack.notes) {
+      layoutStore.updateRack(rack.id, { notes: notesToSave });
+    }
+  }
+
+  // Validate and apply height change
+  function attemptHeightChange(newHeight: number): boolean {
+    // Validate the resize
+    const validation = canResizeRackTo(
+      rack,
+      newHeight,
+      layoutStore.device_types,
+    );
+
+    if (!validation.allowed) {
+      const conflicts = getConflictDetails(
+        validation.conflicts,
+        layoutStore.device_types,
+      );
+      resizeError = formatConflictMessage(conflicts);
+      rackHeight = rack.height; // Reset to current
+      return false;
+    }
+
+    // Clear error and apply change
+    resizeError = null;
+    layoutStore.updateRack(rack.id, { height: newHeight });
+    // Reset view to center the resized rack
+    canvasStore.fitAll(layoutStore.rack ? [layoutStore.rack] : []);
+    return true;
+  }
+
+  // Update rack height on input change
+  function handleHeightChange(event: Event) {
+    const target = event.target as HTMLInputElement;
+    const newHeight = parseInt(target.value, 10);
+    if (newHeight >= 1 && newHeight <= 100) {
+      attemptHeightChange(newHeight);
+    }
+  }
+
+  // Handle preset button click
+  function handlePresetClick(preset: number) {
+    rackHeight = preset;
+    attemptHeightChange(preset);
+  }
+
+  // Handle bay count change atomically
+  function handleBayCountChange(newCount: number) {
+    if (!rackGroup) return;
+
+    bayCountError = null;
+
+    // Use atomic setBayCount which validates upfront before making changes
+    const result = layoutStore.setBayCount(rackGroup.id, newCount);
+    if (result.error) {
+      bayCountError = result.error;
+    }
+  }
+
+  // Clear all devices from rack
+  function handleClearRack() {
+    showClearConfirm = true;
+  }
+
+  function confirmClearRack() {
+    layoutStore.clearRackRecorded(rack.id);
+    showClearConfirm = false;
+    onclose?.();
+  }
+</script>
+
+<div class="rack-edit-sheet">
+  <div class="edit-form">
+    <!-- Rack Name -->
+    <div class="form-group">
+      <label for="rack-name-mobile">
+        Name
+        <SavedIndicator
+          show={rackNameSaved}
+          data-testid="saved-indicator-rack-name"
+        />
+      </label>
+      <input
+        type="text"
+        id="rack-name-mobile"
+        class="input-field"
+        bind:value={rackName}
+        onblur={handleNameBlur}
+        onkeydown={handleNameKeydown}
+        maxlength="50"
+      />
+    </div>
+
+    <!-- Rack Height -->
+    <div class="form-group">
+      <label for="rack-height-mobile">Height</label>
+      <input
+        type="number"
+        id="rack-height-mobile"
+        class="input-field"
+        class:error={resizeError !== null}
+        bind:value={rackHeight}
+        onchange={handleHeightChange}
+        min="1"
+        max="100"
+      />
+      {#if resizeError}
+        <p class="helper-text error">Cannot resize: {resizeError}</p>
+      {/if}
+      <div class="height-presets">
+        {#each COMMON_RACK_HEIGHTS as preset (preset)}
+          <button
+            type="button"
+            class="preset-btn"
+            data-testid="btn-preset-height-{preset}"
+            class:active={rackHeight === preset}
+            onclick={() => handlePresetClick(preset)}
+          >
+            {preset}U
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <!-- Width (read-only for bayed racks) -->
+    {#if isBayedRack}
+      <div class="form-group">
+        <span class="form-label">Width</span>
+        <div class="read-only-value">19" (Standard)</div>
+      </div>
+    {/if}
+
+    <!-- Bay Count (only for bayed racks) -->
+    {#if isBayedRack}
+      <div class="form-group">
+        <span class="form-label">Bay Count</span>
+        <div
+          class="bay-count-controls"
+          role="group"
+          aria-label="Bay count controls"
+        >
+          <button
+            type="button"
+            class="bay-btn"
+            onclick={() => handleBayCountChange(bayCount - 1)}
+            disabled={bayCount <= 2}
+            aria-label="Remove bay"
+          >
+            −
+          </button>
+          <span class="bay-count-display">{bayCount}</span>
+          <button
+            type="button"
+            class="bay-btn"
+            onclick={() => handleBayCountChange(bayCount + 1)}
+            aria-label="Add bay"
+          >
+            +
+          </button>
+        </div>
+        {#if bayCountError}
+          <p class="helper-text error">{bayCountError}</p>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- U Numbering Direction -->
+    <div class="form-group">
+      <label for="rack-numbering-mobile">U Numbering</label>
+      <SegmentedControl
+        options={[
+          { value: "bottom", label: "U1 at bottom" },
+          { value: "top", label: "U1 at top" },
+        ]}
+        value={rack.desc_units ? "top" : "bottom"}
+        onchange={(value) =>
+          layoutStore.updateRack(rack.id, {
+            desc_units: value === "top",
+          })}
+        ariaLabel="U numbering direction"
+      />
+    </div>
+
+    <!-- Show Rear View Toggle -->
+    <div class="form-group">
+      <label for="show-rear-view-mobile">Show Rear View</label>
+      <SegmentedControl
+        options={[
+          { value: "show", label: "Show" },
+          { value: "hide", label: "Hide" },
+        ]}
+        value={rack.show_rear ? "show" : "hide"}
+        onchange={(value) => {
+          const showRear = value === "show";
+          if (rackGroup) {
+            // For bayed racks, update all racks in the group
+            for (const rackId of rackGroup.rack_ids) {
+              layoutStore.updateRack(rackId, { show_rear: showRear });
+            }
+          } else {
+            layoutStore.updateRack(rack.id, { show_rear: showRear });
+          }
+        }}
+        ariaLabel="Show rear view on canvas"
+      />
+    </div>
+
+    <!-- Notes -->
+    <div class="form-group">
+      <label for="rack-notes-mobile">Notes</label>
+      <textarea
+        id="rack-notes-mobile"
+        class="input-field textarea"
+        bind:value={rackNotes}
+        onblur={handleNotesBlur}
+        rows="3"
+        placeholder="Add notes about this rack..."></textarea>
+    </div>
+
+    <!-- Clear Rack Action -->
+    <div class="actions">
+      <button
+        type="button"
+        class="btn-danger"
+        onclick={handleClearRack}
+        disabled={deviceCount === 0}
+        aria-label="Clear all devices from rack"
+      >
+        Clear Rack ({deviceCount}
+        {deviceCount === 1 ? "device" : "devices"})
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Clear Rack Confirmation Dialog -->
+<ConfirmDialog
+  open={showClearConfirm}
+  title="Clear Rack"
+  message="Remove all {deviceCount} {deviceCount === 1
+    ? 'device'
+    : 'devices'} from this rack? This action can be undone."
+  confirmLabel="Clear"
+  destructive={true}
+  onconfirm={confirmClearRack}
+  oncancel={() => {
+    showClearConfirm = false;
+  }}
+/>
+
+<style>
+  .rack-edit-sheet {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    overflow-y: auto;
+    padding-top: var(--space-2);
+  }
+
+  .edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .form-group label,
+  .form-group .form-label {
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    color: var(--colour-text-secondary);
+  }
+
+  .form-group label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .input-field {
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-size-base);
+    color: var(--colour-text);
+    background: var(--colour-surface-secondary);
+    border: 1px solid var(--colour-border);
+    border-radius: var(--radius-md);
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+    /* Ensure touch-friendly sizing */
+    min-height: var(--touch-target-min);
+  }
+
+  .input-field:focus {
+    outline: none;
+    border-color: var(--colour-focus-ring);
+    box-shadow: 0 0 0 2px var(--colour-focus-ring-alpha);
+  }
+
+  .input-field.error {
+    border-color: var(--colour-error);
+  }
+
+  .input-field.textarea {
+    resize: vertical;
+    min-height: calc(var(--touch-target-min) * 2);
+  }
+
+  .helper-text {
+    font-size: var(--font-size-xs);
+    margin: 0;
+  }
+
+  .helper-text.error {
+    color: var(--colour-error);
+  }
+
+  .read-only-value {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-size-base);
+    color: var(--colour-text-secondary);
+    background: var(--colour-surface-secondary);
+    border: 1px solid var(--colour-border);
+    border-radius: var(--radius-md);
+    min-height: var(--touch-target-min);
+    display: flex;
+    align-items: center;
+  }
+
+  .height-presets {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .bay-count-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .bay-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--touch-target-min);
+    height: var(--touch-target-min);
+    font-size: var(--font-size-xl);
+    font-weight: 500;
+    color: var(--colour-text);
+    background: var(--colour-surface-secondary);
+    border: 1px solid var(--colour-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .bay-btn:hover:not(:disabled) {
+    background: var(--colour-surface-hover);
+    border-color: var(--colour-selection);
+  }
+
+  .bay-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .bay-btn:focus-visible {
+    outline: 2px solid var(--colour-focus-ring);
+    outline-offset: 2px;
+  }
+
+  .bay-count-display {
+    font-size: var(--font-size-xl);
+    font-weight: 600;
+    min-width: 2ch;
+    text-align: center;
+  }
+
+  .preset-btn {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    color: var(--colour-text-secondary);
+    background: var(--colour-surface-secondary);
+    border: 1px solid var(--colour-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease;
+    /* Touch-friendly size */
+    min-height: var(--touch-target-min);
+    min-width: var(--touch-target-min);
+  }
+
+  .preset-btn:hover,
+  .preset-btn:focus-visible {
+    background: var(--colour-surface-hover);
+    border-color: var(--colour-border-hover);
+  }
+
+  .preset-btn.active {
+    background: var(--colour-selection);
+    border-color: var(--colour-selection);
+    color: var(--colour-text-on-selection);
+  }
+
+  .preset-btn:focus-visible {
+    outline: 2px solid var(--colour-focus-ring);
+    outline-offset: 2px;
+  }
+
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--colour-border);
+  }
+
+  .btn-danger {
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-medium);
+    color: var(--colour-button-destructive);
+    background: transparent;
+    border: 1px solid var(--colour-button-destructive);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease;
+    /* Touch-friendly size */
+    min-height: var(--touch-target-min);
+  }
+
+  .btn-danger:hover:not(:disabled),
+  .btn-danger:focus-visible:not(:disabled) {
+    background: var(--colour-button-destructive-hover);
+    color: var(--colour-text-on-primary);
+  }
+
+  .btn-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .btn-danger:focus-visible {
+    outline: 2px solid var(--colour-focus-ring);
+    outline-offset: 2px;
+  }
+</style>

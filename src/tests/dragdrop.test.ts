@@ -1,0 +1,689 @@
+import { describe, it, expect, vi } from "vitest";
+import {
+  calculateDropPosition,
+  getDropFeedback,
+  hideNativeDragGhost,
+  detectContainerDropTarget,
+  detectContainerHover,
+  type DragData,
+} from "$lib/utils/dragdrop";
+import type { Rack, DeviceType, PlacedDevice } from "$lib/types";
+import { findStarterDevice } from "$lib/data/starterLibrary";
+import {
+  createTestRack,
+  createTestDevice,
+  createTestDeviceType,
+} from "./factories";
+import { toInternalUnits } from "$lib/utils/position";
+
+// Helper to create a placed device with internal unit position
+function pd(
+  id: string,
+  device_type: string,
+  positionU: number,
+  face: "front" | "rear" | "both",
+): PlacedDevice {
+  return {
+    id,
+    device_type,
+    position: toInternalUnits(positionU),
+    face,
+  };
+}
+
+describe("Drag and Drop Utilities", () => {
+  // Constants matching component implementation
+  const U_HEIGHT = 22;
+  const RACK_PADDING = 4;
+
+  describe("calculateDropPosition", () => {
+    // 12U rack: totalHeight = 12 * 22 = 264
+    // SVG coordinate system: y=0 at top, y=264 at bottom
+    // U12 is at top (y=0-22), U1 is at bottom (y=242-264)
+
+    it("returns U1 for mouse near bottom of rack", () => {
+      // Mouse at y=250 (near bottom, within U1 range)
+      const position = calculateDropPosition(250, 12, U_HEIGHT, RACK_PADDING);
+      expect(position).toBe(1);
+    });
+
+    it("returns correct U for mouse near top", () => {
+      // Mouse at y=10 (near top, within U12 range)
+      const position = calculateDropPosition(10, 12, U_HEIGHT, RACK_PADDING);
+      expect(position).toBe(12);
+    });
+
+    it("returns correct U for mouse in middle", () => {
+      // Mouse at y=132 (middle of rack, around U6-U7)
+      const position = calculateDropPosition(132, 12, U_HEIGHT, RACK_PADDING);
+      // Middle of 12U rack, y=132 should be around U6
+      expect(position).toBeGreaterThanOrEqual(5);
+      expect(position).toBeLessThanOrEqual(7);
+    });
+
+    it("snaps to nearest U boundary", () => {
+      // Any Y position within a U range should snap to that U
+      const position1 = calculateDropPosition(245, 12, U_HEIGHT, RACK_PADDING);
+      const position2 = calculateDropPosition(255, 12, U_HEIGHT, RACK_PADDING);
+      // Both should be U1 (bottom)
+      expect(position1).toBe(1);
+      expect(position2).toBe(1);
+    });
+
+    it("clamps to minimum U (1) for y beyond rack bottom", () => {
+      const position = calculateDropPosition(500, 12, U_HEIGHT, RACK_PADDING);
+      expect(position).toBe(1);
+    });
+
+    it("clamps to maximum U for y above rack top", () => {
+      const position = calculateDropPosition(-50, 12, U_HEIGHT, RACK_PADDING);
+      expect(position).toBe(12);
+    });
+
+    it("handles 42U rack correctly", () => {
+      // 42U rack: totalHeight = 42 * 22 = 924
+      const bottomPosition = calculateDropPosition(
+        920,
+        42,
+        U_HEIGHT,
+        RACK_PADDING,
+      );
+      const topPosition = calculateDropPosition(10, 42, U_HEIGHT, RACK_PADDING);
+
+      expect(bottomPosition).toBe(1);
+      expect(topPosition).toBe(42);
+    });
+  });
+
+  describe("getDropFeedback", () => {
+    const mockDevice: DeviceType = {
+      slug: "device-1",
+      model: "Test Server",
+      u_height: 2,
+      colour: "#4A90D9",
+      category: "server",
+    };
+
+    const emptyRack: Rack = {
+      name: "Test Rack",
+      height: 12,
+      width: 19,
+      position: 0,
+      desc_units: false,
+      form_factor: "4-post",
+      starting_unit: 1,
+      devices: [],
+    };
+
+    const deviceLibrary: DeviceType[] = [mockDevice];
+
+    it('returns "valid" for empty position in empty rack', () => {
+      const feedback = getDropFeedback(emptyRack, deviceLibrary, 2, 5);
+      expect(feedback).toBe("valid");
+    });
+
+    it('returns "valid" for position 1 (bottom)', () => {
+      const feedback = getDropFeedback(emptyRack, deviceLibrary, 2, 1);
+      expect(feedback).toBe("valid");
+    });
+
+    it('returns "invalid" for position exceeding rack height', () => {
+      // 2U device at position 12 would occupy U12-U13 (out of bounds)
+      const feedback = getDropFeedback(emptyRack, deviceLibrary, 2, 12);
+      expect(feedback).toBe("invalid");
+    });
+
+    it('returns "invalid" for position 0', () => {
+      const feedback = getDropFeedback(emptyRack, deviceLibrary, 2, 0);
+      expect(feedback).toBe("invalid");
+    });
+
+    it('returns "invalid" for negative position', () => {
+      const feedback = getDropFeedback(emptyRack, deviceLibrary, 2, -1);
+      expect(feedback).toBe("invalid");
+    });
+
+    it('returns "blocked" for collision with existing device', () => {
+      const rackWithDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("dd-test-1", "device-1", 5, "front")], // Device at U5-U6
+      };
+
+      // Trying to place at U5 (would collide)
+      const feedback = getDropFeedback(rackWithDevice, deviceLibrary, 2, 5);
+      expect(feedback).toBe("blocked");
+    });
+
+    it('returns "blocked" for partial collision', () => {
+      const rackWithDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("dd-test-2", "device-1", 5, "front")], // Device at U5-U6
+      };
+
+      // 2U device at position 4 would occupy U4-U5 (collides with U5)
+      const feedback = getDropFeedback(rackWithDevice, deviceLibrary, 2, 4);
+      expect(feedback).toBe("blocked");
+    });
+
+    it('returns "valid" for position adjacent to existing device', () => {
+      const rackWithDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("dd-test-3", "device-1", 5, "front")], // Device at U5-U6
+      };
+
+      // 2U device at position 7 would occupy U7-U8 (no collision)
+      const feedback = getDropFeedback(rackWithDevice, deviceLibrary, 2, 7);
+      expect(feedback).toBe("valid");
+
+      // 1U device at position 4 would only occupy U4 (no collision)
+      const feedback2 = getDropFeedback(rackWithDevice, deviceLibrary, 1, 4);
+      expect(feedback2).toBe("valid");
+    });
+
+    it('returns "valid" for 1U device at top of 12U rack', () => {
+      const feedback = getDropFeedback(emptyRack, deviceLibrary, 1, 12);
+      expect(feedback).toBe("valid");
+    });
+  });
+
+  describe("getDropFeedback with face awareness (#168)", () => {
+    // Half-depth device for testing
+    const halfDepthDevice: DeviceType = {
+      slug: "patch-panel",
+      model: "Patch Panel",
+      u_height: 1,
+      colour: "#888888",
+      category: "patch_panel",
+      is_full_depth: false,
+    };
+
+    // Full-depth device for testing
+    const fullDepthDevice: DeviceType = {
+      slug: "full-server",
+      model: "Full Server",
+      u_height: 2,
+      colour: "#4A90D9",
+      category: "server",
+      is_full_depth: true,
+    };
+
+    const deviceLibrary: DeviceType[] = [halfDepthDevice, fullDepthDevice];
+
+    const emptyRack: Rack = {
+      name: "Test Rack",
+      height: 12,
+      width: 19,
+      position: 0,
+      desc_units: false,
+      form_factor: "4-post",
+      starting_unit: 1,
+      devices: [],
+    };
+
+    it("allows drop on rear when half-depth front device exists at same U", () => {
+      const rackWithFrontDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("front-1", "patch-panel", 5, "front")],
+      };
+
+      // Dropping half-depth device on rear at U5 should be valid
+      const feedback = getDropFeedback(
+        rackWithFrontDevice,
+        deviceLibrary,
+        1, // device height
+        5, // target U
+        undefined, // excludeIndex
+        "rear", // target face
+      );
+      expect(feedback).toBe("valid");
+    });
+
+    it("allows drop on front when half-depth rear device exists at same U", () => {
+      const rackWithRearDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("rear-1", "patch-panel", 5, "rear")],
+      };
+
+      // Dropping half-depth device on front at U5 should be valid
+      const feedback = getDropFeedback(
+        rackWithRearDevice,
+        deviceLibrary,
+        1,
+        5,
+        undefined,
+        "front",
+      );
+      expect(feedback).toBe("valid");
+    });
+
+    it("blocks drop on rear when full-depth device is stored as front-only", () => {
+      // Full-depth devices occupy both faces regardless of stored face (#2337)
+      const rackWithFrontOnlyDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("front-full", "full-server", 5, "front")],
+      };
+
+      // Dropping on rear at U5 should be blocked (full-depth spans both faces)
+      const feedback = getDropFeedback(
+        rackWithFrontOnlyDevice,
+        deviceLibrary,
+        1,
+        5,
+        undefined,
+        "rear",
+      );
+      expect(feedback).toBe("blocked");
+    });
+
+    it("blocks drop on rear when device has face set to both", () => {
+      const rackWithBothFaceDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("both-device", "full-server", 5, "both")],
+      };
+
+      // Dropping on rear at U5 should be blocked (face: "both" blocks everything)
+      const feedback = getDropFeedback(
+        rackWithBothFaceDevice,
+        deviceLibrary,
+        1,
+        5,
+        undefined,
+        "rear",
+      );
+      expect(feedback).toBe("blocked");
+    });
+
+    it("allows drop on rear when existing device has face set to front", () => {
+      // With face-authoritative model, face: "front" doesn't block rear
+      const rackWithFrontDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("front-half", "patch-panel", 5, "front")],
+      };
+
+      // Dropping device on rear at U5 should be valid (existing device only blocks front)
+      const feedback = getDropFeedback(
+        rackWithFrontDevice,
+        deviceLibrary,
+        1,
+        5,
+        undefined,
+        "rear",
+      );
+      expect(feedback).toBe("valid");
+    });
+
+    it("blocks drop when devices overlap on same face", () => {
+      const rackWithFrontDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("front-1", "patch-panel", 5, "front")],
+      };
+
+      // Dropping device on front at U5 should be blocked (same face)
+      const feedback = getDropFeedback(
+        rackWithFrontDevice,
+        deviceLibrary,
+        1,
+        5,
+        undefined,
+        "front",
+      );
+      expect(feedback).toBe("blocked");
+    });
+
+    it("defaults to front face when targetFace not provided", () => {
+      const rackWithRearDevice: Rack = {
+        ...emptyRack,
+        devices: [pd("rear-1", "patch-panel", 5, "rear")],
+      };
+
+      // Without face param, defaults to 'front' - opposite faces don't collide
+      const feedback = getDropFeedback(rackWithRearDevice, deviceLibrary, 1, 5);
+      expect(feedback).toBe("valid");
+    });
+  });
+
+  describe("hideNativeDragGhost", () => {
+    it("calls setDragImage with a 1x1 element", () => {
+      const mockDataTransfer = {
+        setDragImage: vi.fn(),
+      } as unknown as DataTransfer;
+
+      hideNativeDragGhost(mockDataTransfer);
+
+      expect(mockDataTransfer.setDragImage).toHaveBeenCalledTimes(1);
+      const [element, x, y] = (
+        mockDataTransfer.setDragImage as ReturnType<typeof vi.fn>
+      ).mock.calls[0];
+      expect(element).toBeInstanceOf(HTMLCanvasElement);
+      expect(x).toBe(0);
+      expect(y).toBe(0);
+    });
+  });
+
+  describe("detectContainerDropTarget y-aware targeting (C3, #2291)", () => {
+    // 12U rack, U_HEIGHT=22. y=0 is U12 (top), y=264 is U1.
+    // The U5 band spans y in [154, 176): upper half (row 1) [154, 165),
+    // lower half (row 0) [165, 176). A 2x2 carrier sits at U5.
+    const RACK_WIDTH = 220;
+
+    const carrier2x2 = findStarterDevice("carrier-1u-2x2")!;
+    const child = createTestDeviceType({
+      slug: "rb5009",
+      u_height: 0.5,
+      slot_width: 1,
+    });
+    const deviceLibrary: DeviceType[] = [carrier2x2, child];
+
+    function rackWithCarrier(children: PlacedDevice[] = []): Rack {
+      const carrier: PlacedDevice = {
+        id: "carrier-1",
+        device_type: "carrier-1u-2x2",
+        position: toInternalUnits(5),
+        face: "both",
+      };
+      return {
+        name: "Test Rack",
+        height: 12,
+        width: 19,
+        position: 0,
+        desc_units: false,
+        form_factor: "4-post",
+        starting_unit: 1,
+        devices: [carrier, ...children],
+      };
+    }
+
+    it("targets a bottom-row slot when the cursor is in the lower half of the carrier", () => {
+      const target = detectContainerDropTarget(
+        rackWithCarrier(),
+        deviceLibrary,
+        child,
+        170, // lower half of U5
+        40, // left column
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+      );
+      expect(target?.slotId).toBe("r0-c0");
+    });
+
+    it("targets an upper-row slot when the cursor is in the upper half of the carrier", () => {
+      const target = detectContainerDropTarget(
+        rackWithCarrier(),
+        deviceLibrary,
+        child,
+        158, // upper half of U5
+        40, // left column
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+      );
+      expect(target?.slotId).toBe("r1-c0");
+    });
+
+    it("targets a right column slot when the cursor is on the right", () => {
+      const target = detectContainerDropTarget(
+        rackWithCarrier(),
+        deviceLibrary,
+        child,
+        170, // lower half
+        180, // right column
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+      );
+      expect(target?.slotId).toBe("r0-c1");
+    });
+
+    it("falls back to the next free cell when the targeted cell is occupied", () => {
+      const occupied: PlacedDevice = {
+        id: "child-1",
+        device_type: "rb5009",
+        position: 0,
+        face: "both",
+        container_id: "carrier-1",
+        slot_id: "r0-c0",
+      };
+      const target = detectContainerDropTarget(
+        rackWithCarrier([occupied]),
+        deviceLibrary,
+        child,
+        170, // lower-left, but r0-c0 is taken
+        40,
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+      );
+      expect(target?.slotId).toBeDefined();
+      expect(target?.slotId).not.toBe("r0-c0");
+    });
+
+    it("returns null when every cell is occupied", () => {
+      const fill = ["r0-c0", "r0-c1", "r1-c0", "r1-c1"].map(
+        (slotId, i): PlacedDevice => ({
+          id: `child-${i}`,
+          device_type: "rb5009",
+          position: 0,
+          face: "both",
+          container_id: "carrier-1",
+          slot_id: slotId,
+        }),
+      );
+      const target = detectContainerDropTarget(
+        rackWithCarrier(fill),
+        deviceLibrary,
+        child,
+        170,
+        40,
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+      );
+      expect(target).toBeNull();
+    });
+
+    it("returns null when no container sits at the target U", () => {
+      const emptyRack: Rack = {
+        name: "Test Rack",
+        height: 12,
+        width: 19,
+        position: 0,
+        desc_units: false,
+        form_factor: "4-post",
+        starting_unit: 1,
+        devices: [],
+      };
+      const target = detectContainerDropTarget(
+        emptyRack,
+        deviceLibrary,
+        child,
+        170,
+        40,
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+      );
+      expect(target).toBeNull();
+    });
+
+    it("detects a full-depth container stored as front-only when dropping on the rear face (legacy data)", () => {
+      // carrier-1u-2x2 has no is_full_depth set -> full-depth by invariant.
+      // A legacy placement with face: "front" must still be reachable from rear.
+      const frontRack: Rack = {
+        name: "Test Rack",
+        height: 12,
+        width: 19,
+        position: 0,
+        desc_units: false,
+        form_factor: "4-post",
+        starting_unit: 1,
+        devices: [
+          {
+            id: "carrier-front",
+            device_type: "carrier-1u-2x2",
+            position: toInternalUnits(5),
+            face: "front",
+          },
+        ],
+      };
+      const target = detectContainerDropTarget(
+        frontRack,
+        deviceLibrary,
+        child,
+        170,
+        40,
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+        "rear",
+      );
+      expect(target).not.toBeNull();
+    });
+
+    it("ignores a half-depth front-only container when dropping on the rear face", () => {
+      // A carrier with is_full_depth: false only occupies the front face; it
+      // must not be offered as a drop target when the view is rear.
+      const halfDepthCarrier: DeviceType = {
+        ...carrier2x2,
+        slug: "carrier-half-depth",
+        is_full_depth: false,
+      };
+      const halfDepthLibrary: DeviceType[] = [halfDepthCarrier, child];
+      const halfDepthRack = createTestRack({
+        height: 12,
+        devices: [
+          createTestDevice({
+            id: "carrier-half",
+            device_type: "carrier-half-depth",
+            position: 5,
+            face: "front",
+          }),
+        ],
+      });
+      const target = detectContainerDropTarget(
+        halfDepthRack,
+        halfDepthLibrary,
+        child,
+        170,
+        40,
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+        "rear",
+      );
+      expect(target).toBeNull();
+    });
+  });
+
+  describe("detectContainerHover full-depth face derivation (#2337)", () => {
+    // Mirror the detectContainerDropTarget fix: full-depth containers must be
+    // visible during hover even when stored face is "front".
+    const U_HEIGHT = 22;
+    const RACK_WIDTH = 220;
+    const carrier2x2 = findStarterDevice("carrier-1u-2x2")!;
+    const child = createTestDeviceType({
+      slug: "hover-child",
+      u_height: 0.5,
+      slot_width: 1,
+    });
+    const deviceLibrary: DeviceType[] = [carrier2x2, child];
+
+    it("detects a full-depth carrier stored as front-only when hovering on the rear face", () => {
+      const rack = createTestRack({
+        height: 12,
+        devices: [
+          createTestDevice({
+            id: "c1",
+            device_type: "carrier-1u-2x2",
+            position: 5,
+            face: "front",
+          }),
+        ],
+      });
+      // y=170 lands in the U5 band of a 12U rack (uHeight=22)
+      const info = detectContainerHover(
+        rack,
+        deviceLibrary,
+        child,
+        170,
+        40,
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+        "rear",
+      );
+      expect(info).not.toBeNull();
+      expect(info?.containerId).toBe("c1");
+    });
+
+    it("returns null for a half-depth front-only carrier when hovering on the rear face", () => {
+      const halfDepth: DeviceType = {
+        ...carrier2x2,
+        slug: "carrier-half",
+        is_full_depth: false,
+      };
+      const rack = createTestRack({
+        height: 12,
+        devices: [
+          createTestDevice({
+            id: "c2",
+            device_type: "carrier-half",
+            position: 5,
+            face: "front",
+          }),
+        ],
+      });
+      const info = detectContainerHover(
+        rack,
+        [halfDepth, child],
+        child,
+        170,
+        40,
+        RACK_WIDTH,
+        12,
+        U_HEIGHT,
+        "rear",
+      );
+      expect(info).toBeNull();
+    });
+  });
+
+  describe("DragData interface", () => {
+    it("palette drag data has correct shape", () => {
+      const dragData: DragData = {
+        type: "palette",
+        device: {
+          slug: "device-1",
+          model: "Test",
+          u_height: 1,
+          colour: "#000",
+          category: "server",
+        },
+      };
+
+      expect(dragData.type).toBe("palette");
+      expect(dragData.device).toBeDefined();
+      expect(dragData.sourceRackId).toBeUndefined();
+      expect(dragData.sourceIndex).toBeUndefined();
+    });
+
+    it("rack-device drag data has correct shape", () => {
+      const dragData: DragData = {
+        type: "rack-device",
+        device: {
+          slug: "device-1",
+          model: "Test",
+          u_height: 1,
+          colour: "#000",
+          category: "server",
+        },
+        sourceRackId: "rack-1",
+        sourceIndex: 0,
+      };
+
+      expect(dragData.type).toBe("rack-device");
+      expect(dragData.sourceRackId).toBe("rack-1");
+      expect(dragData.sourceIndex).toBe(0);
+    });
+  });
+});

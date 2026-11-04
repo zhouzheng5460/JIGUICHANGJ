@@ -1,0 +1,277 @@
+/**
+ * The single dispatch spine: maps every registry ActionId to the closure that
+ * runs it in this app. Both the keyboard handler and the command palette consume
+ * this one map so a command runs identically however it is invoked.
+ *
+ * Stores and app-level action functions are module singletons (getLayoutStore,
+ * maybeSave, handleHelp, ...), so this module resolves them internally and takes
+ * no arguments - mirroring selection-actions.ts and dialog-actions.ts.
+ *
+ * Adaptation notes (differences from plan vs actual API):
+ * - handleRackContextFocus and handleRackContextExport take string[] (not string);
+ *   closures wrap selectedRackId in an array.
+ * - handleLoad is imported from $lib/storage (re-exported from storage/index.ts).
+ * - toggle-display-mode replicates App.handleToggleDisplayMode inline (no singleton).
+ */
+import { getActionById, type ActionId } from "$lib/actions/registry";
+import { matchesShortcut } from "$lib/utils/keyboard";
+import { getLayoutStore } from "$lib/stores/layout.svelte";
+import { getSelectionStore } from "$lib/stores/selection.svelte";
+import { getUIStore } from "$lib/stores/ui.svelte";
+import { getToastStore } from "$lib/stores/toast.svelte";
+import { getPlacementStore } from "$lib/stores/placement.svelte";
+import { dialogStore } from "$lib/stores/dialogs.svelte";
+import {
+  moveSelectedDeviceUp,
+  moveSelectedDeviceDown,
+  moveSelectedDeviceToSlot,
+  duplicateSelection,
+  flipSelectedDeviceFace,
+  moveSelectedRack,
+  baySelectedRack,
+} from "$lib/actions/selection-actions";
+import {
+  maybeSave,
+  maybeSaveAs,
+  maybeExport,
+  handleShare,
+  handleFitAll,
+  resetAndCreateNewRack,
+} from "$lib/utils/app-actions";
+import {
+  handleDelete,
+  handleHelp,
+  handleAddDevice,
+  handleImportFromNetBox,
+  handleOpenYamlEditor,
+  handleNewRack,
+} from "$lib/utils/dialog-actions";
+import {
+  handleRackContextFocus,
+  handleRackContextExport,
+} from "$lib/utils/rack-actions";
+import { handleLoad, handleExportAll, shouldSaveToServer } from "$lib/storage";
+import { runImportDevices } from "$lib/actions/import-devices-trigger";
+import { runRestoreFromFile } from "$lib/actions/restore-file-trigger";
+import { openStarterById } from "$lib/stores/starter-templates.svelte";
+
+export type ActionDispatch = Record<ActionId, () => void | Promise<void>>;
+
+/** True when the event matches any command-palette binding (Ctrl/Cmd+K). */
+export function isCommandPaletteShortcut(event: KeyboardEvent): boolean {
+  const action = getActionById("command-palette");
+  if (!action) return false;
+  return action.bindings.some((b) =>
+    matchesShortcut(event, {
+      key: b.key,
+      ctrl: b.ctrl,
+      meta: b.meta,
+      shift: b.shift,
+      action: () => {},
+    }),
+  );
+}
+
+// Mutating commands: guarded here like the other mutation verbs below, so the
+// read-only lock holds even if a caller reaches this entry outside the
+// palette's own enabledWhen gating (#2804, mirrors create-rack's #2995 guard).
+function performUndo(): void {
+  if (getUIStore().readOnly) return;
+  const layoutStore = getLayoutStore();
+  const toastStore = getToastStore();
+  if (!layoutStore.canUndo) return;
+  const desc = layoutStore.undoDescription?.replace("Undo: ", "") ?? "action";
+  layoutStore.undo();
+  toastStore.showToast(`Undid: ${desc}`, "info");
+}
+
+function performRedo(): void {
+  if (getUIStore().readOnly) return;
+  const layoutStore = getLayoutStore();
+  const toastStore = getToastStore();
+  if (!layoutStore.canRedo) return;
+  const desc = layoutStore.redoDescription?.replace("Redo: ", "") ?? "action";
+  layoutStore.redo();
+  toastStore.showToast(`Redid: ${desc}`, "info");
+}
+
+function handleEscape(): void {
+  const layoutStore = getLayoutStore();
+  const selectionStore = getSelectionStore();
+  const uiStore = getUIStore();
+  const placementStore = getPlacementStore();
+  if (placementStore.isPlacing) {
+    placementStore.cancelPlacement();
+    handleFitAll();
+    return;
+  }
+  // Close any open mobile sheet before clearing selection so Escape gives the
+  // user a progressive exit: sheet first, then selection. Clear selection at
+  // the same time so the device-details $effect in DialogOrchestrator (which
+  // auto-opens that sheet whenever a device is selected on mobile) does not
+  // immediately reopen the sheet we just closed.
+  if (dialogStore.currentSheet !== null) {
+    dialogStore.closeSheet();
+    selectionStore.clearSelection();
+    return;
+  }
+  selectionStore.clearSelection();
+  layoutStore.setActiveRack(null);
+  uiStore.closeRightDrawer();
+}
+
+function cycleActiveRack(direction: -1 | 1): void {
+  const layoutStore = getLayoutStore();
+  const selectionStore = getSelectionStore();
+  const toastStore = getToastStore();
+  const racks = layoutStore.racks;
+  if (racks.length === 0) return;
+  const currentId = layoutStore.activeRackId;
+  const currentIndex = currentId
+    ? racks.findIndex((r) => r.id === currentId)
+    : -1;
+  let newIndex: number;
+  if (currentIndex === -1) {
+    newIndex = direction === 1 ? 0 : racks.length - 1;
+  } else {
+    newIndex = (currentIndex + direction + racks.length) % racks.length;
+  }
+  const newRack = racks[newIndex];
+  if (!newRack) return;
+  if (newRack.id === currentId) return;
+  layoutStore.setActiveRack(newRack.id);
+  selectionStore.selectRack(newRack.id);
+  toastStore.showToast(`Active: ${newRack.name}`, "info");
+}
+
+function handleToggleDisplayMode(): void {
+  const uiStore = getUIStore();
+  const layoutStore = getLayoutStore();
+  uiStore.toggleDisplayMode();
+  layoutStore.updateDisplayMode(uiStore.displayMode);
+  layoutStore.updateShowLabelsOnImages(uiStore.showLabelsOnImages);
+}
+
+/**
+ * Build the dispatch map. Every ActionId has an entry so the map is total.
+ */
+export function createActionDispatch(): ActionDispatch {
+  return {
+    // global
+    escape: handleEscape,
+    "show-help": handleHelp,
+    settings: () => dialogStore.open("settings"),
+    undo: performUndo,
+    redo: performRedo,
+    save: maybeSave,
+    "save-as": maybeSaveAs,
+    "export-backup": maybeSaveAs,
+    "export-all": () => {
+      void handleExportAll();
+    },
+    // Mutating command: replaces the working copy, so the read-only lock is
+    // enforced here like undo/redo above (#2804).
+    "restore-file": () => {
+      if (getUIStore().readOnly) return;
+      runRestoreFromFile();
+    },
+    export: maybeExport,
+    share: handleShare,
+    load: handleLoad,
+    "view-yaml": handleOpenYamlEditor,
+    // Resetting to a new layout replaces the working copy, so confirm first when
+    // the current layout is not durably persisted. The signal is storage-mode
+    // aware (#2801): in server mode a successful server save clears isDirty, so
+    // key on isDirty (edits not yet saved to the server); in file/browser mode
+    // key on changesSinceExport (edits not yet in any exported file). This
+    // mirrors what the confirm dialog's "Save First" button does per mode
+    // (handleSaveFirst also branches on shouldSaveToServer), so the guard and the
+    // save it offers never disagree. A durably-persisted copy resets straight away.
+    "new-layout": () => {
+      const layoutStore = getLayoutStore();
+      const hasUndurableChanges = shouldSaveToServer()
+        ? layoutStore.isDirty
+        : layoutStore.changesSinceExport > 0;
+      if (hasUndurableChanges) {
+        dialogStore.open("confirmReplace");
+      } else {
+        resetAndCreateNewRack();
+      }
+    },
+    // Starter templates open in a NEW tab (non-destructive), so they route
+    // through the shared starter-open path, not the replace-current new-layout.
+    "new-layout-template-home-lab": () => openStarterById("home-lab"),
+    "new-layout-template-network-closet": () =>
+      openStarterById("network-closet"),
+    "new-layout-template-media-server": () => openStarterById("media-server"),
+    // Mutating command: guarded here like the other mutation verbs below, so
+    // the read-only lock holds even if a caller reaches this entry outside
+    // the palette's own enabledWhen gating (#2995).
+    "create-rack": () => {
+      if (getUIStore().readOnly) return;
+      handleNewRack();
+    },
+    "import-devices": runImportDevices,
+    "import-netbox": handleImportFromNetBox,
+    "new-custom-device": handleAddDevice,
+    "command-palette": () => dialogStore.open("commandPalette"),
+    // layout
+    "fit-all": handleFitAll,
+    "toggle-display-mode": handleToggleDisplayMode,
+    "toggle-annotations": () => getUIStore().toggleAnnotations(),
+    "cycle-rack-prev": () => cycleActiveRack(-1),
+    "cycle-rack-next": () => cycleActiveRack(1),
+    // selection — each mutation verb checks readOnly so keyboard shortcuts
+    // and the command palette respect the lock without per-call-site guards.
+    "delete-selection": () => {
+      if (getUIStore().readOnly) return;
+      handleDelete();
+    },
+    "move-device-up": () => {
+      if (getUIStore().readOnly) return;
+      moveSelectedDeviceUp();
+    },
+    "move-device-down": () => {
+      if (getUIStore().readOnly) return;
+      moveSelectedDeviceDown();
+    },
+    "move-device-slot": () => {
+      if (getUIStore().readOnly) return;
+      moveSelectedDeviceToSlot();
+    },
+    "duplicate-selection": () => {
+      if (getUIStore().readOnly) return;
+      duplicateSelection();
+    },
+    "flip-device-face": () => {
+      if (getUIStore().readOnly) return;
+      flipSelectedDeviceFace();
+    },
+    // Rack reorder and bay verbs live on the floating verb bar (#2822); they
+    // have no keybinding and are excluded from the palette, so these entries
+    // exist only to keep the dispatch map total. Their real gating (row length,
+    // empty-vs-populated, bay group) is resolved inside the shared handlers;
+    // read-only is enforced here like the other mutation verbs.
+    "move-rack-left": () => {
+      if (getUIStore().readOnly) return;
+      moveSelectedRack("left");
+    },
+    "move-rack-right": () => {
+      if (getUIStore().readOnly) return;
+      moveSelectedRack("right");
+    },
+    "bay-rack": () => {
+      if (getUIStore().readOnly) return;
+      baySelectedRack();
+    },
+    // rack-actions take string[] not string; wrap selectedRackId in array
+    "focus-rack": () => {
+      const id = getSelectionStore().selectedRackId;
+      if (id) handleRackContextFocus([id]);
+    },
+    "export-rack": () => {
+      const id = getSelectionStore().selectedRackId;
+      if (id) handleRackContextExport([id]);
+    },
+  };
+}

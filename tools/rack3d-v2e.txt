@@ -1,0 +1,21 @@
+﻿=== NOTES ===
+canvas box: {"x":953.8125,"y":151.5,"width":393.1875,"height":701.5}
+A 榛樿鐩告満/瑙嗚: {"active":["姝ｄ氦"],"presets":[{"value":"iso","label":"榛樿瑙嗗浘锛堟枩瑙嗭級"},{"value":"front","label":"姝ｈ鍥?},{"value":"side","label":"渚ц鍥?},{"value":"top","label":"椤惰鍥?}],"selected":"iso"}
+F 鐢诲竷鍍忕礌鍩虹嚎: {"size":"393x702","nonBg":36.26,"cyan":0.05,"pink":0,"green":0.35,"amber":0,"red":0,"teal":1.66}
+B 瑙嗚棰勮: {"front":{"size":"393x702","nonBg":27.48,"cyan":0.12,"pink":0,"green":8.01,"amber":0,"red":0,"teal":2.45},"side":{"size":"393x702","nonBg":28.23,"cyan":0.01,"pink":0,"green":0.01,"amber":0,"red":0,"teal":0},"top":{"size":"393x702","nonBg":43.92,"cyan":0.01,"pink":0,"green":0.01,"amber":0,"red":0,"teal":0},"iso":{"size":"393x702","nonBg":25.33,"cyan":0.03,"pink":0,"green":0.25,"amber":0.16,"red":0,"teal":0.93}}
+C 閫忚: {"active":"閫忚","stats":{"size":"393x702","nonBg":27.29,"cyan":0.24,"pink":0,"green":0.25,"amber":0,"red":0,"teal":1.2}}
+C 鍥炲埌姝ｄ氦: {"active":"姝ｄ氦","stats":{"size":"393x702","nonBg":25.33,"cyan":0.03,"pink":0,"green":0.26,"amber":0,"red":0,"teal":0.93}}
+G 鍛戒腑璁惧 A: {"rx":0.54,"ry":0.4,"x":1166.13375,"y":432.1,"name":"鏍稿績浜ゆ崲鏈?}
+G 寮圭獥缁撴瀯: {"name":"鏍稿績浜ゆ崲鏈?,"rows":["鍚嶇О=鏍稿績浜ゆ崲鏈?,"鏈哄瀷=Switch (24-Port)","浣嶇疆=1U 路 姝ｉ潰 路 鏈烘煖 A / 涓绘煖","鐘舵€?鍦ㄧ嚎","寮€鍏?寮€"],"barWidth":"77.4%","barLabel":"鍔熺巼 (W)","hasSpark":true,"sparkD":"M0.0,12.6 L8.3,20.1 L16.7,41.0 L25.0,19.","axis":"鏈€杩?25 娆￠噰鏍?鐜板湪","contained":true}
+E 閫変腑鍚庡儚绱? {"size":"393x702","nonBg":53.08,"cyan":0.15,"pink":1.11,"green":0.68,"amber":0,"red":0,"teal":3.06}
+E 鍏冲崱鐗囧悗: {"popupClosed":true,"stats":{"size":"393x702","nonBg":53.08,"cyan":0.14,"pink":1.11,"green":0.6,"amber":0.01,"red":0,"teal":2.9}}
+D 鑷姩鑱氱劍: {"autoFocusOff":true,"hitA":{"rx":0.54,"ry":0.4,"x":1166.13375,"y":432.1,"name":"鏍稿績浜ゆ崲鏈?},"hitB":{"rx":0.3,"ry":0.5,"x":1071.76875,"y":502.25,"name":"搴旂敤鏈嶅姟鍣?},"focusOn":{"size":"393x702","nonBg":53.08,"cyan":0.12,"pink":1.11,"green":0.67,"amber":0,"red":0,"teal":2.27},"base":{"size":"393x702","nonBg":36.26,"cyan":0.05,"pink":0,"green":0.35,"amber":0,"red":0,"teal":1.66},"beforeNoFocus":{"size":"393x702","nonBg":24.72,"cyan":0.03,"pink":0.59,"green":0.25,"amber":0,"red":0,"teal":0.83},"afterNoFocus":{"size":"393x702","nonBg":24.68,"cyan":0.03,"pink":0.59,"green":0.25,"amber":0,"red":0,"teal":0.92}}
+H 鍏冪礌闈㈡澘: ["绔嬫柟浣?,"鐞冧綋","妗屽瓙","妞呭瓙"]
+H 鎻愮ず鏂囨: 鐐瑰嚮鍦伴潰鏀剧疆 路 鎷栧姩鍏冪礌鍙钩绉?H 钀藉湴: {"placedOk":true,"placedAt":[0.2,0.86]}
+H 娴姩鏉? {"name":"绔嬫柟浣?,"swatches":8,"hasDelete":true,"inViewport":true,"paletteHasClear":true}
+H 鏀硅壊: {"colourBefore":"#8be9fd","colourAfter":"#ffb86c"}
+
+=== ERRORS (0) ===
+
+
+exit=0

@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+
+reviews:
+  # Block PRs until CodeRabbit issues are resolved
+  request_changes_workflow: true
+
+  # Review settings
+  high_level_summary: false
+  high_level_summary_in_walkthrough: true
+  poem: true
+  profile: assertive # Stricter reviews for quality
+  collapse_walkthrough: true
+
+  # Paths to exclude from review
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/*.snap"
+    - "!**/package-lock.json"
+    # Vendored third-party skill loaded into the security-triage CI run as-is.
+    # Reviewing it against local doc style would diverge from its upstream source
+    # (BehiSecc/VibeSec-Skill); refresh it from upstream instead.
+    - "!.github/claude-plugins/**"
+
+  # Enable auto-review on all PRs
+  auto_review:
+    enabled: true
+    # Skip auto-review for the autoformat bot. Note: ignore_usernames is
+    # PR-author-scoped, so this may not suppress incremental re-review of the
+    # bot's pushes to a human-authored PR; the reliable mitigation is keeping
+    # branches prettier-clean so the bot never fires. See issue #2840.
+    ignore_usernames:
+      - rackula-format-bot
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto

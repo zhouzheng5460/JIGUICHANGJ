@@ -1,0 +1,111 @@
+name: Soak Smoke
+
+# Scheduled browser smoke check against the live prod and dev deployments,
+# independent of any deploy trigger. Each run is the 7-day soak signal that
+# #1986 (VPS decommission) reads before destroying the Linode instance: the
+# decommission gate is an unbroken 7-day streak of green runs on this
+# workflow, queryable with:
+#
+#   gh run list --workflow=soak-smoke.yml --limit 50
+#
+# A run's conclusion is a plain success/failure across both targets (matrix
+# fail-fast is off so both legs always run, but either leg failing marks the
+# whole run failed), so the streak query above is a straightforward read of
+# the "conclusion" column with no per-job digging required. See issue #2676.
+#
+# count.racku.la is public (confirmed by #3094: prod stays public; M017 brings
+# its own OAuth later) and is served from Cloudflare Workers Static Assets as of
+# #2029, so it needs no CF Access token. d.racku.la sits behind Cloudflare Access
+# and authenticates via the same service-token secrets deploy-dev.yml uses
+# (CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET, added by #2346); its leg is
+# commented out until #2134 moves dev onto Workers.
+
+on:
+  schedule:
+    # Every 6 hours at :43, off the top and bottom of the hour to avoid the
+    # scheduler's busiest minutes.
+    - cron: "43 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: soak-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Smoke (${{ matrix.target.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: prod
+            url: https://count.racku.la
+          # TODO(#2134): restore the dev leg when d.racku.la moves to Workers.
+          # It is removed, not left failing, on purpose. A run's conclusion spans
+          # both legs (fail-fast is off, but either leg failing fails the run),
+          # so while d.racku.la is down every run would be red. That destroys the
+          # two things this workflow exists for: the 7-day green streak that
+          # gates #1986, and an alert anyone still trusts. A permanently-red
+          # check is what got this workflow muted during the August 2026 outage
+          # (#3167) - it failed correctly for three days and was then disabled.
+          # - name: dev
+          #   url: https://d.racku.la
+    env:
+      SMOKE_TEST_URL: ${{ matrix.target.url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-chromium-
+
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+
+      # No CF_ACCESS_* here: count.racku.la is public (#3094, decided), and the
+      # only target in the matrix today is prod. Handing Access service-token
+      # credentials to a public target would put them in the environment of a
+      # job that has no use for them.
+      #
+      # TODO(#2134): when the dev leg is restored, scope these to that target
+      # only - e.g. a per-target matrix flag gating the env, not a job-wide
+      # export. d.racku.la sits behind Access and the smoke config
+      # (playwright.smoke.config.ts) applies them as request headers; without
+      # them the dev leg hits the login wall instead of the app (#2346).
+      # Cloudflare serves a Managed Challenge to datacenter IPs across the zone.
+      # The specs navigate first so Chromium solves it, then use `page.request`,
+      # which inherits the clearance cookie. Before that fix a bare API request
+      # saw a 403 challenge page, which is why every run of this workflow failed
+      # from 2026-07-20 until #2029 -- 79 runs, zero successes, predating the
+      # August outage entirely.
+      - name: Browser smoke test against deployed app
+        run: npm run test:e2e:smoke
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: soak-smoke-report-${{ matrix.target.name }}
+          path: playwright-report/
+          retention-days: 7

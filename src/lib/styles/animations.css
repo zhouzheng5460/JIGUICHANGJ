@@ -1,0 +1,213 @@
+/**
+ * Animation Token System
+ * Keyframes and timing tokens for celebratory, loading, and feedback animations
+ */
+
+/* ==========================================================================
+   Semantic Animation Duration Tokens
+   ========================================================================== */
+
+:root {
+  /* Celebration animations */
+  --anim-rainbow: 6s;
+  --anim-party: 0.5s;
+  --anim-party-duration: 5s;
+
+  /* Loading animations */
+  --anim-loading: 2s;
+  --anim-shimmer: 2s;
+
+  /* Feedback animations */
+  --anim-success-glow: 0.5s;
+  --anim-toast-exit: 0.3s;
+  --anim-drag-settle: 0.15s;
+}
+
+/* ==========================================================================
+   Shimmer Animation
+   Light sweep effect for loading states
+   ========================================================================== */
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* ==========================================================================
+   Breathing/Pulse Animations
+   ========================================================================== */
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes pulse-scale {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+/* ==========================================================================
+   Success Feedback
+   ========================================================================== */
+
+@keyframes success-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(80, 250, 123, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+/* ==========================================================================
+   Toast Animations
+   ========================================================================== */
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOut {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+/* ==========================================================================
+   Logo Slot Animations
+   For LogoLoader component
+   ========================================================================== */
+
+@keyframes slot-fill {
+  0%,
+  100% {
+    transform: scaleX(0);
+    transform-origin: left;
+  }
+  50% {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+}
+
+@keyframes slot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* ==========================================================================
+   Party Mode Animations
+   ========================================================================== */
+
+@keyframes wobble {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-3deg);
+  }
+  75% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes rainbow-border {
+  0% {
+    border-color: #bd93f9;
+  }
+  14% {
+    border-color: #ff79c6;
+  }
+  28% {
+    border-color: #8be9fd;
+  }
+  42% {
+    border-color: #50fa7b;
+  }
+  57% {
+    border-color: #ffb86c;
+  }
+  71% {
+    border-color: #ff5555;
+  }
+  85% {
+    border-color: #f1fa8c;
+  }
+  100% {
+    border-color: #bd93f9;
+  }
+}
+
+/* ==========================================================================
+   Drop Zone Feedback
+   ========================================================================== */
+
+@keyframes pulse-border {
+  0% {
+    box-shadow: 0 0 0 0 rgba(80, 250, 123, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(80, 250, 123, 0.2);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(80, 250, 123, 0);
+  }
+}
+
+@keyframes flash-invalid {
+  0%,
+  100% {
+    border-color: var(--colour-border);
+  }
+  50% {
+    border-color: var(--colour-error);
+  }
+}
+
+/* ==========================================================================
+   Reduced Motion
+   Respect user preference for reduced motion
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

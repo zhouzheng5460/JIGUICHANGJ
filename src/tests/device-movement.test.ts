@@ -1,0 +1,566 @@
+/**
+ * Device Movement Utility Tests
+ * Tests for shared device movement logic used by keyboard and mobile handlers
+ */
+
+import { describe, it, expect } from "vitest";
+import {
+  findNextValidPosition,
+  canMoveUp,
+  canMoveDown,
+  getDeviceWithType,
+  getMoveBlockedMessage,
+} from "$lib/utils/device-movement";
+import type { Rack, DeviceType, PlacedDevice } from "$lib/types";
+import { toInternalUnits } from "$lib/utils/position";
+
+// Helper to create a placed device with internal unit position
+function pd(
+  device_type: string,
+  positionU: number,
+  face: "front" | "rear" | "both",
+): PlacedDevice {
+  return {
+    id: `${device_type}-${positionU}`,
+    device_type,
+    position: toInternalUnits(positionU),
+    face,
+  };
+}
+
+describe("Device Movement Utility", () => {
+  // Helper to create a test rack
+  function createTestRack(
+    height: number = 42,
+    devices: PlacedDevice[] = [],
+  ): Rack {
+    return {
+      id: "rack-0",
+      name: "Test Rack",
+      height,
+      width: 19,
+      view: "front",
+      devices,
+    };
+  }
+
+  // Helper to create device types
+  function createDeviceTypes(): DeviceType[] {
+    return [
+      {
+        slug: "1u-server",
+        u_height: 1,
+        model: "1U Server",
+        colour: "#4A90D9",
+        category: "server",
+      },
+      {
+        slug: "2u-server",
+        u_height: 2,
+        model: "2U Server",
+        colour: "#4A90D9",
+        category: "server",
+      },
+      {
+        slug: "4u-storage",
+        u_height: 4,
+        model: "4U Storage",
+        colour: "#4A90D9",
+        category: "storage",
+      },
+      {
+        slug: "front-only-device",
+        u_height: 1,
+        model: "Front Only",
+        colour: "#4A90D9",
+        category: "server",
+        is_full_depth: false,
+      },
+    ];
+  }
+
+  describe("findNextValidPosition", () => {
+    describe("Basic Movement", () => {
+      it("moves a 1U device up by 1U", () => {
+        const rack = createTestRack(42, [pd("1u-server", 10, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(11));
+        expect(result.reason).toBe("moved");
+      });
+
+      it("moves a 1U device down by 1U", () => {
+        const rack = createTestRack(42, [pd("1u-server", 10, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, -1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(9));
+        expect(result.reason).toBe("moved");
+      });
+
+      it("moves a 2U device up by 1U (consistent step size)", () => {
+        const rack = createTestRack(42, [pd("2u-server", 10, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(11));
+        expect(result.reason).toBe("moved");
+      });
+
+      it("moves a 4U device down by 1U (consistent step size)", () => {
+        const rack = createTestRack(42, [pd("4u-storage", 10, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, -1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(9));
+        expect(result.reason).toBe("moved");
+      });
+    });
+
+    describe("Boundary Conditions", () => {
+      it("returns at_boundary when device is at top and trying to move up", () => {
+        const rack = createTestRack(42, [pd("1u-server", 42, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(false);
+        expect(result.newPosition).toBeNull();
+        expect(result.reason).toBe("at_boundary");
+      });
+
+      it("returns at_boundary when device is at bottom and trying to move down", () => {
+        const rack = createTestRack(42, [pd("1u-server", 1, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, -1);
+
+        expect(result.success).toBe(false);
+        expect(result.newPosition).toBeNull();
+        expect(result.reason).toBe("at_boundary");
+      });
+
+      it("returns at_boundary when 2U device is at top (position 41)", () => {
+        const rack = createTestRack(42, [pd("2u-server", 41, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(false);
+        expect(result.newPosition).toBeNull();
+        expect(result.reason).toBe("at_boundary");
+      });
+
+      it("returns at_boundary when 4U device at position 39 tries to move up", () => {
+        const rack = createTestRack(42, [pd("4u-storage", 39, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(false);
+        expect(result.newPosition).toBeNull();
+        expect(result.reason).toBe("at_boundary");
+      });
+    });
+
+    describe("Leapfrog Behavior", () => {
+      it("leapfrogs over a blocking device when moving up", () => {
+        const rack = createTestRack(42, [
+          pd("1u-server", 10, "front"), // Device to move
+          pd("1u-server", 11, "front"), // Blocking device
+        ]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(12));
+        expect(result.reason).toBe("moved");
+      });
+
+      it("leapfrogs over a blocking device when moving down", () => {
+        const rack = createTestRack(42, [
+          pd("1u-server", 10, "front"), // Device to move
+          pd("1u-server", 9, "front"), // Blocking device
+        ]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, -1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(8));
+        expect(result.reason).toBe("moved");
+      });
+
+      it("leapfrogs over multiple blocking devices", () => {
+        const rack = createTestRack(42, [
+          pd("1u-server", 10, "front"), // Device to move
+          pd("1u-server", 11, "front"), // Blocking
+          pd("1u-server", 12, "front"), // Blocking
+          pd("1u-server", 13, "front"), // Blocking
+        ]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(14));
+        expect(result.reason).toBe("moved");
+      });
+
+      it("leapfrogs over a multi-U blocking device", () => {
+        const rack = createTestRack(42, [
+          pd("1u-server", 10, "front"), // Device to move
+          pd("4u-storage", 11, "front"), // 4U blocking device (U11-U14)
+        ]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(15));
+        expect(result.reason).toBe("moved");
+      });
+
+      it("returns no_valid_position when blocked all the way to boundary", () => {
+        const rack = createTestRack(10, [
+          pd("1u-server", 5, "front"), // Device to move
+          pd("1u-server", 6, "front"),
+          pd("1u-server", 7, "front"),
+          pd("1u-server", 8, "front"),
+          pd("1u-server", 9, "front"),
+          pd("1u-server", 10, "front"),
+        ]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(false);
+        expect(result.newPosition).toBeNull();
+        expect(result.reason).toBe("no_valid_position");
+      });
+    });
+
+    describe("Face-Aware Collisions", () => {
+      it("does not collide with device on opposite face", () => {
+        const rack = createTestRack(42, [
+          pd("front-only-device", 10, "front"), // Device to move
+          pd("front-only-device", 11, "rear"), // Opposite face
+        ]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(11));
+        expect(result.reason).toBe("moved");
+      });
+
+      it("collides with device on same face", () => {
+        const rack = createTestRack(42, [
+          pd("front-only-device", 10, "front"),
+          pd("front-only-device", 11, "front"),
+        ]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(12)); // Leapfrogs
+        expect(result.reason).toBe("moved");
+      });
+
+      it("half-depth front device does not collide with rear-only device (face-authoritative)", () => {
+        // front-only-device has is_full_depth: false, so face: "front" only
+        // blocks the front. A rear-only device at U11 does not block it.
+        const rack = createTestRack(42, [
+          pd("front-only-device", 10, "front"), // Half-depth, front face
+          pd("front-only-device", 11, "rear"), // Half-depth, rear-only
+        ]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        // Half-depth front device can move to U11 (rear-only device doesn't block)
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(11));
+        expect(result.reason).toBe("moved");
+      });
+
+      it("handles both-face device correctly", () => {
+        const rack = createTestRack(42, [pd("1u-server", 10, "both")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(true);
+        expect(result.newPosition).toBe(toInternalUnits(11));
+        expect(result.reason).toBe("moved");
+      });
+    });
+
+    describe("Error Handling", () => {
+      it("returns failure for invalid device index", () => {
+        const rack = createTestRack(42, [pd("1u-server", 10, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 99, 1);
+
+        expect(result.success).toBe(false);
+        expect(result.newPosition).toBeNull();
+        expect(result.reason).toBe("no_valid_position");
+      });
+
+      it("returns failure for unknown device type", () => {
+        const rack = createTestRack(42, [pd("unknown-device", 10, "front")]);
+        const deviceTypes = createDeviceTypes();
+
+        const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+        expect(result.success).toBe(false);
+        expect(result.newPosition).toBeNull();
+        expect(result.reason).toBe("no_valid_position");
+      });
+    });
+  });
+
+  describe("canMoveUp", () => {
+    it("returns true when device can move up", () => {
+      const rack = createTestRack(42, [pd("1u-server", 10, "front")]);
+      const deviceTypes = createDeviceTypes();
+
+      expect(canMoveUp(rack, deviceTypes, 0)).toBe(true);
+    });
+
+    it("returns false when device is at top", () => {
+      const rack = createTestRack(42, [pd("1u-server", 42, "front")]);
+      const deviceTypes = createDeviceTypes();
+
+      expect(canMoveUp(rack, deviceTypes, 0)).toBe(false);
+    });
+
+    it("returns false when blocked to top boundary", () => {
+      const rack = createTestRack(10, [
+        pd("1u-server", 5, "front"),
+        pd("1u-server", 6, "front"),
+        pd("1u-server", 7, "front"),
+        pd("1u-server", 8, "front"),
+        pd("1u-server", 9, "front"),
+        pd("1u-server", 10, "front"),
+      ]);
+      const deviceTypes = createDeviceTypes();
+
+      expect(canMoveUp(rack, deviceTypes, 0)).toBe(false);
+    });
+
+    it("returns false for a container child (rack-level move would detach it)", () => {
+      const child = pd("1u-server", 10, "front");
+      child.container_id = "container-1";
+      child.slot_id = "slot-left";
+      const rack = createTestRack(42, [child]);
+      const deviceTypes = createDeviceTypes();
+
+      expect(canMoveUp(rack, deviceTypes, 0)).toBe(false);
+    });
+  });
+
+  describe("canMoveDown", () => {
+    it("returns true when device can move down", () => {
+      const rack = createTestRack(42, [pd("1u-server", 10, "front")]);
+      const deviceTypes = createDeviceTypes();
+
+      expect(canMoveDown(rack, deviceTypes, 0)).toBe(true);
+    });
+
+    it("returns false when device is at bottom", () => {
+      const rack = createTestRack(42, [pd("1u-server", 1, "front")]);
+      const deviceTypes = createDeviceTypes();
+
+      expect(canMoveDown(rack, deviceTypes, 0)).toBe(false);
+    });
+
+    it("returns false when blocked to bottom boundary", () => {
+      const rack = createTestRack(10, [
+        pd("1u-server", 5, "front"),
+        pd("1u-server", 4, "front"),
+        pd("1u-server", 3, "front"),
+        pd("1u-server", 2, "front"),
+        pd("1u-server", 1, "front"),
+      ]);
+      const deviceTypes = createDeviceTypes();
+
+      expect(canMoveDown(rack, deviceTypes, 0)).toBe(false);
+    });
+
+    it("returns false for a container child (rack-level move would detach it)", () => {
+      const child = pd("1u-server", 10, "front");
+      child.container_id = "container-1";
+      child.slot_id = "slot-left";
+      const rack = createTestRack(42, [child]);
+      const deviceTypes = createDeviceTypes();
+
+      expect(canMoveDown(rack, deviceTypes, 0)).toBe(false);
+    });
+  });
+
+  // The mobile selection inspector nudges a device with Move Up / Move Down.
+  // A blocked nudge must give the user feedback (a toast) instead of silently
+  // doing nothing, mirroring the desktop edit panel's disabled controls. This
+  // helper turns a MoveResult into that feedback message so the mobile handler
+  // can surface it without reimplementing collision logic.
+  describe("getMoveBlockedMessage", () => {
+    it("returns null when the move succeeded (no feedback needed)", () => {
+      const rack = createTestRack(42, [pd("1u-server", 10, "front")]);
+      const deviceTypes = createDeviceTypes();
+      const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+      expect(getMoveBlockedMessage(result, 1)).toBeNull();
+    });
+
+    it("reports the top boundary when moving up from the top", () => {
+      const rack = createTestRack(42, [pd("1u-server", 42, "front")]);
+      const deviceTypes = createDeviceTypes();
+      const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+      const message = getMoveBlockedMessage(result, 1);
+      expect(message).not.toBeNull();
+      expect(message?.toLowerCase()).toContain("top");
+    });
+
+    it("reports the bottom boundary when moving down from the bottom", () => {
+      const rack = createTestRack(42, [pd("1u-server", 1, "front")]);
+      const deviceTypes = createDeviceTypes();
+      const result = findNextValidPosition(rack, deviceTypes, 0, -1);
+
+      const message = getMoveBlockedMessage(result, -1);
+      expect(message).not.toBeNull();
+      expect(message?.toLowerCase()).toContain("bottom");
+    });
+
+    it("reports a blocked move when neighbours fill the way to the boundary", () => {
+      const rack = createTestRack(10, [
+        pd("1u-server", 5, "front"), // device to move
+        pd("1u-server", 6, "front"),
+        pd("1u-server", 7, "front"),
+        pd("1u-server", 8, "front"),
+        pd("1u-server", 9, "front"),
+        pd("1u-server", 10, "front"),
+      ]);
+      const deviceTypes = createDeviceTypes();
+      const result = findNextValidPosition(rack, deviceTypes, 0, 1);
+
+      const message = getMoveBlockedMessage(result, 1);
+      expect(message).not.toBeNull();
+      expect(message?.toLowerCase()).toContain("up");
+    });
+  });
+
+  describe("Full-depth device collision detection (#2337)", () => {
+    // A full-depth device has is_full_depth omitted or true, meaning it
+    // physically spans both faces. Even when the stored face is "front" (legacy
+    // data), the effective face must resolve to "both" so the device cannot move
+    // into a slot already occupied on the rear.
+
+    it("blocks a full-depth device stored as front-only from moving into a rear-occupied slot", () => {
+      const deviceTypes = createDeviceTypes();
+      // full-depth-server: no is_full_depth field -> full-depth by invariant.
+      const fullDepthType: DeviceType = {
+        slug: "full-depth-server",
+        u_height: 1,
+        model: "Full Depth Server",
+        colour: "#4A90D9",
+        category: "server",
+      };
+      const rearOnlyType: DeviceType = {
+        slug: "rear-patch",
+        u_height: 1,
+        model: "Rear Patch",
+        colour: "#888888",
+        category: "patch_panel",
+        is_full_depth: false,
+      };
+      const allTypes = [...deviceTypes, fullDepthType, rearOnlyType];
+
+      // Full-depth device at U10, stored face "front" (legacy).
+      // Rear-only patch at U11. The full-depth device must NOT be moveable to
+      // U11 because its effective face is "both", which collides with "rear".
+      const rack = createTestRack(42, [
+        pd("full-depth-server", 10, "front"),
+        pd("rear-patch", 11, "rear"),
+      ]);
+
+      const result = findNextValidPosition(rack, allTypes, 0, 1);
+
+      // U11 is occupied by a rear device; full-depth device's effective face is
+      // "both" which collides with "rear". Move must leapfrog to U12.
+      expect(result.success).toBe(true);
+      expect(result.newPosition).toBe(toInternalUnits(12));
+    });
+
+    it("allows a half-depth front device to move into a rear-occupied slot", () => {
+      const deviceTypes = createDeviceTypes();
+      const rearOnlyType: DeviceType = {
+        slug: "rear-patch",
+        u_height: 1,
+        model: "Rear Patch",
+        colour: "#888888",
+        category: "patch_panel",
+        is_full_depth: false,
+      };
+      const allTypes = [...deviceTypes, rearOnlyType];
+
+      // front-only-device is explicitly is_full_depth: false.
+      const rack = createTestRack(42, [
+        pd("front-only-device", 10, "front"),
+        pd("rear-patch", 11, "rear"),
+      ]);
+
+      const result = findNextValidPosition(rack, allTypes, 0, 1);
+
+      // Half-depth front device's effective face is "front"; "front" does not
+      // collide with "rear", so U11 is valid.
+      expect(result.success).toBe(true);
+      expect(result.newPosition).toBe(toInternalUnits(11));
+    });
+  });
+
+  describe("getDeviceWithType", () => {
+    it("returns device and type for valid index", () => {
+      const rack = createTestRack(42, [pd("1u-server", 10, "front")]);
+      const deviceTypes = createDeviceTypes();
+
+      const result = getDeviceWithType(rack, deviceTypes, 0);
+
+      expect(result).not.toBeNull();
+      expect(result!.device.position).toBe(toInternalUnits(10));
+      expect(result!.deviceType.slug).toBe("1u-server");
+    });
+
+    it("returns null for invalid index", () => {
+      const rack = createTestRack(42, [pd("1u-server", 10, "front")]);
+      const deviceTypes = createDeviceTypes();
+
+      const result = getDeviceWithType(rack, deviceTypes, 99);
+
+      expect(result).toBeNull();
+    });
+
+    it("returns null for unknown device type", () => {
+      const rack = createTestRack(42, [pd("unknown-device", 10, "front")]);
+      const deviceTypes = createDeviceTypes();
+
+      const result = getDeviceWithType(rack, deviceTypes, 0);
+
+      expect(result).toBeNull();
+    });
+  });
+});

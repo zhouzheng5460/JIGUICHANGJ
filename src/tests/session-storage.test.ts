@@ -1,0 +1,658 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  saveSession,
+  loadSessionWithTimestamp,
+  clearSession,
+  isServerNewer,
+  detectModeFlip,
+} from "$lib/storage/working-copy";
+import type { Layout } from "$lib/types";
+import { UNITS_PER_U } from "$lib/types/constants";
+import { createTestLayout, createTestRack } from "./factories";
+
+// Mock localStorage
+const localStorageMock = (() => {
+  let store: Record<string, string> = {};
+  return {
+    getItem: (key: string) => store[key] || null,
+    setItem: (key: string, value: string) => {
+      store[key] = value;
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+    clear: () => {
+      store = {};
+    },
+  };
+})();
+
+Object.defineProperty(globalThis, "localStorage", {
+  value: localStorageMock,
+  writable: true,
+});
+
+/**
+ * Assert a loaded layout preserves the saved layout's identity. The read path
+ * runs the body through LayoutSchema, which adds runtime defaults (e.g.
+ * rack.view), so exact deep equality with the saved input does not hold. Compare
+ * the schema-stable fields the round-trip must preserve instead.
+ */
+function expectSameLayoutIdentity(loaded: Layout, saved: Layout): void {
+  expect(loaded.name).toBe(saved.name);
+  expect(loaded.racks.map((r) => r.id)).toEqual(saved.racks.map((r) => r.id));
+  expect(loaded.racks.map((r) => r.name)).toEqual(
+    saved.racks.map((r) => r.name),
+  );
+}
+
+describe("Session Storage", () => {
+  const STORAGE_KEY = "Rackula:autosave";
+  const noBackup = { changesSinceExport: 0, hasEverExported: false };
+
+  // Schema-valid layout for testing. The working-copy read path validates
+  // through LayoutSchema, so fixtures must be valid layouts (same ingress as
+  // file/server load).
+  const mockLayout = createTestLayout({
+    racks: [createTestRack({ id: "rack-0", name: "Test Rack" })],
+  });
+
+  beforeEach(() => {
+    // Clear localStorage before each test
+    localStorageMock.clear();
+  });
+
+  afterEach(() => {
+    // Clean up after each test
+    localStorageMock.clear();
+  });
+
+  describe("saveSession", () => {
+    it("saves layout to localStorage with timestamp wrapper", () => {
+      const result = saveSession(mockLayout, noBackup);
+
+      expect(result).toBe(true);
+      const stored = localStorage.getItem(STORAGE_KEY);
+      expect(stored).toBeTruthy();
+      const parsed = JSON.parse(stored!);
+      // New format: { layout: Layout, savedAt: string }
+      expect(parsed.layout).toEqual(mockLayout);
+      expect(parsed.savedAt).toBeDefined();
+      expect(typeof parsed.savedAt).toBe("string");
+      // Verify it's a valid ISO timestamp
+      expect(new Date(parsed.savedAt).toISOString()).toBe(parsed.savedAt);
+    });
+
+    it("returns true on successful save", () => {
+      const result = saveSession(mockLayout, noBackup);
+      expect(result).toBe(true);
+    });
+
+    it("handles QuotaExceededError gracefully", () => {
+      // Mock localStorage.setItem to throw QuotaExceededError
+      const originalSetItem = localStorage.setItem;
+      localStorage.setItem = vi.fn(() => {
+        const error = new Error("QuotaExceededError");
+        error.name = "QuotaExceededError";
+        throw error;
+      });
+
+      const result = saveSession(mockLayout, noBackup);
+
+      // Should return false on error (logs via debug logger, not console.warn)
+      expect(result).toBe(false);
+
+      // Restore original implementation
+      localStorage.setItem = originalSetItem;
+    });
+
+    it("overwrites existing session with new timestamp", () => {
+      // Use fake timers for deterministic timestamp testing
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-02-01T12:00:00.000Z"));
+
+        saveSession(mockLayout, noBackup);
+        const firstStored = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
+        expect(firstStored.savedAt).toBe("2026-02-01T12:00:00.000Z");
+
+        vi.advanceTimersByTime(1000);
+
+        const updatedLayout = createTestLayout({
+          racks: [
+            createTestRack({
+              id: "rack-1",
+              name: "Updated Rack",
+              height: 24,
+              devices: [],
+            }),
+          ],
+        });
+        saveSession(updatedLayout, noBackup);
+
+        const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
+        expect(parsed.layout).toEqual(updatedLayout);
+        expect(parsed.savedAt).toBe("2026-02-01T12:00:01.000Z");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("loadSessionWithTimestamp - error handling", () => {
+    it("returns null when no session exists", () => {
+      expect(loadSessionWithTimestamp()).toBeNull();
+    });
+
+    it("loads saved layout from localStorage", () => {
+      // Save a session first
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(mockLayout));
+
+      const loaded = loadSessionWithTimestamp();
+      expect(loaded).not.toBeNull();
+      expectSameLayoutIdentity(loaded!.layout, mockLayout);
+    });
+
+    it("returns null on invalid JSON", () => {
+      // Store invalid JSON
+      localStorage.setItem(STORAGE_KEY, "invalid-json");
+
+      // Should return null on parse error (logs via debug logger)
+      expect(loadSessionWithTimestamp()).toBeNull();
+    });
+
+    it("handles localStorage errors gracefully", () => {
+      // Mock localStorage.getItem to throw an error
+      const originalGetItem = localStorage.getItem;
+      localStorage.getItem = vi.fn(() => {
+        throw new Error("Storage error");
+      });
+
+      // Should return null on error (logs via debug logger)
+      expect(loadSessionWithTimestamp()).toBeNull();
+
+      // Restore original implementation
+      localStorage.getItem = originalGetItem;
+    });
+  });
+
+  describe("clearSession", () => {
+    it("removes session from localStorage", () => {
+      // Save a session first
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(mockLayout));
+      expect(localStorage.getItem(STORAGE_KEY)).toBeTruthy();
+
+      clearSession();
+
+      expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    });
+
+    it("does not throw when no session exists", () => {
+      expect(() => clearSession()).not.toThrow();
+    });
+
+    it("handles localStorage errors gracefully", () => {
+      // Mock localStorage.removeItem to throw an error
+      const originalRemoveItem = localStorage.removeItem;
+      localStorage.removeItem = vi.fn(() => {
+        throw new Error("Storage error");
+      });
+
+      // Should not throw (logs via debug logger)
+      expect(() => clearSession()).not.toThrow();
+
+      // Restore original implementation
+      localStorage.removeItem = originalRemoveItem;
+    });
+  });
+
+  describe("loadSessionWithTimestamp", () => {
+    it("returns null when no session exists", () => {
+      const result = loadSessionWithTimestamp();
+      expect(result).toBeNull();
+    });
+
+    it("loads new format with timestamp", () => {
+      const timestamp = "2026-02-01T12:00:00.000Z";
+      const sessionData = {
+        layout: mockLayout,
+        savedAt: timestamp,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sessionData));
+
+      const result = loadSessionWithTimestamp();
+      expect(result).not.toBeNull();
+      expectSameLayoutIdentity(result!.layout, mockLayout);
+      expect(result!.savedAt).toBe(timestamp);
+    });
+
+    it("drops a top-level images section so base64 never rides onto the runtime layout", () => {
+      const sessionData = {
+        layout: {
+          ...mockLayout,
+          images: { thumb: "data:image/png;base64,AAAA" },
+        },
+        savedAt: "2026-02-01T12:00:00.000Z",
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sessionData));
+
+      const result = loadSessionWithTimestamp();
+      expect(result).not.toBeNull();
+      expect(
+        Object.hasOwn(result!.layout as Record<string, unknown>, "images"),
+      ).toBe(false);
+    });
+
+    it("loads legacy format without timestamp", () => {
+      // Legacy format: direct layout object without wrapper
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(mockLayout));
+
+      const result = loadSessionWithTimestamp();
+      expect(result).not.toBeNull();
+      expectSameLayoutIdentity(result!.layout, mockLayout);
+      expect(result!.savedAt).toBeNull(); // Legacy data has no timestamp
+    });
+  });
+
+  describe("isServerNewer", () => {
+    it("returns true when local timestamp is null (legacy data)", () => {
+      const serverTime = "2026-02-01T12:00:00.000Z";
+      expect(isServerNewer(null, serverTime)).toBe(true);
+    });
+
+    it("returns true when server is newer", () => {
+      const localTime = "2026-02-01T10:00:00.000Z";
+      const serverTime = "2026-02-01T12:00:00.000Z";
+      expect(isServerNewer(localTime, serverTime)).toBe(true);
+    });
+
+    it("returns false when local is newer", () => {
+      const localTime = "2026-02-01T14:00:00.000Z";
+      const serverTime = "2026-02-01T12:00:00.000Z";
+      expect(isServerNewer(localTime, serverTime)).toBe(false);
+    });
+
+    it("returns false when timestamps are equal", () => {
+      const timestamp = "2026-02-01T12:00:00.000Z";
+      expect(isServerNewer(timestamp, timestamp)).toBe(false);
+    });
+
+    it("returns true for invalid local timestamp", () => {
+      const serverTime = "2026-02-01T12:00:00.000Z";
+      expect(isServerNewer("invalid-date", serverTime)).toBe(true);
+    });
+
+    it("returns true for invalid server timestamp", () => {
+      const localTime = "2026-02-01T12:00:00.000Z";
+      expect(isServerNewer(localTime, "invalid-date")).toBe(true);
+    });
+  });
+
+  describe("Integration", () => {
+    it("round-trips save and load with timestamp metadata", () => {
+      saveSession(mockLayout, noBackup);
+      const loaded = loadSessionWithTimestamp();
+      expect(loaded).not.toBeNull();
+      expectSameLayoutIdentity(loaded!.layout, mockLayout);
+      expect(loaded!.savedAt).toBeDefined();
+    });
+
+    it("clear removes saved session", () => {
+      saveSession(mockLayout, noBackup);
+      const loaded = loadSessionWithTimestamp();
+      expect(loaded).not.toBeNull();
+      expectSameLayoutIdentity(loaded!.layout, mockLayout);
+
+      clearSession();
+      expect(loadSessionWithTimestamp()).toBeNull();
+    });
+  });
+
+  describe("Legacy format migration", () => {
+    it("migrates legacy rack format to racks array", () => {
+      // Simulate v0.6.16 localStorage data with single `rack` property
+      const legacyData = {
+        version: "0.6.16",
+        name: "Test Layout",
+        rack: {
+          id: "rack-1",
+          name: "Main Rack",
+          height: 42,
+          width: 19,
+          devices: [],
+          form_factor: "2-post",
+          starting_unit: 1,
+          position: 0,
+          desc_units: false,
+          show_rear: true,
+        },
+        device_types: [],
+        settings: {
+          display_mode: "label",
+          show_labels_on_images: false,
+        },
+      };
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyData));
+
+      const loaded = loadSessionWithTimestamp();
+
+      expect(loaded).not.toBeNull();
+      expect(loaded!.layout.racks).toBeDefined();
+      // eslint-disable-next-line no-restricted-syntax -- migration should produce exactly 1 rack
+      expect(loaded!.layout.racks).toHaveLength(1);
+      expect(loaded!.layout.racks[0].name).toBe("Main Rack");
+      // Legacy 'rack' property should not exist on migrated layout
+      expect((loaded!.layout as Record<string, unknown>).rack).toBeUndefined();
+    });
+
+    it("handles modern racks array format unchanged", () => {
+      const modernData = {
+        version: "0.7.0",
+        name: "Test Layout",
+        racks: [
+          {
+            id: "rack-1",
+            name: "Main Rack",
+            height: 42,
+            width: 19,
+            devices: [],
+            form_factor: "2-post",
+            starting_unit: 1,
+            position: 0,
+            desc_units: false,
+            show_rear: true,
+          },
+        ],
+        device_types: [],
+        settings: {
+          display_mode: "label",
+          show_labels_on_images: false,
+        },
+      };
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(modernData));
+
+      const loaded = loadSessionWithTimestamp();
+
+      expect(loaded).not.toBeNull();
+      // eslint-disable-next-line no-restricted-syntax -- verifying migration preserves exact count
+      expect(loaded!.layout.racks).toHaveLength(1);
+    });
+
+    it("migrates position values for pre-0.7.0 layouts", () => {
+      // Pre-0.7.0 layouts used U-values directly (e.g., position: 1 meant U1)
+      // Post-0.7.0 uses internal units (e.g., position: 6 for U1)
+      const legacyData = {
+        version: "0.6.16",
+        name: "Test Layout",
+        rack: {
+          id: "rack-1",
+          name: "Main Rack",
+          height: 42,
+          width: 19,
+          devices: [
+            {
+              id: "device-1",
+              device_type: "server-1u",
+              position: 1, // U1 in old format
+              face: "front",
+              ports: [],
+            },
+            {
+              id: "device-2",
+              device_type: "server-2u",
+              position: 10, // U10 in old format
+              face: "front",
+              ports: [],
+            },
+          ],
+          form_factor: "2-post",
+          starting_unit: 1,
+          position: 0,
+          desc_units: false,
+          show_rear: true,
+        },
+        device_types: [],
+        settings: {
+          display_mode: "label",
+          show_labels_on_images: false,
+        },
+      };
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyData));
+
+      const loaded = loadSessionWithTimestamp();
+
+      expect(loaded).not.toBeNull();
+      // Position values should be multiplied by UNITS_PER_U
+      expect(loaded!.layout.racks[0].devices[0].position).toBe(1 * UNITS_PER_U);
+      expect(loaded!.layout.racks[0].devices[1].position).toBe(
+        10 * UNITS_PER_U,
+      );
+    });
+
+    it("does not migrate container child positions", () => {
+      // Container children use 0-indexed positions relative to container
+      // These should NOT be multiplied
+      const legacyData = {
+        version: "0.6.16",
+        name: "Test Layout",
+        rack: {
+          id: "rack-1",
+          name: "Main Rack",
+          height: 42,
+          width: 19,
+          devices: [
+            {
+              id: "container-1",
+              device_type: "blade-chassis",
+              position: 5, // U5 in old format - should be migrated
+              face: "front",
+              ports: [],
+            },
+            {
+              id: "blade-1",
+              device_type: "blade-server",
+              position: 2, // Relative to container (0-indexed row 2) - should NOT be migrated
+              container_id: "container-1",
+              slot_id: "bay-1",
+              face: "front",
+              ports: [],
+            },
+          ],
+          form_factor: "2-post",
+          starting_unit: 1,
+          position: 0,
+          desc_units: false,
+          show_rear: true,
+        },
+        device_types: [],
+        settings: {
+          display_mode: "label",
+          show_labels_on_images: false,
+        },
+      };
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyData));
+
+      const loaded = loadSessionWithTimestamp();
+
+      expect(loaded).not.toBeNull();
+      // Container position should be migrated
+      expect(loaded!.layout.racks[0].devices[0].position).toBe(5 * UNITS_PER_U);
+      // Child position should NOT be migrated (remains 2)
+      expect(loaded!.layout.racks[0].devices[1].position).toBe(2);
+    });
+
+    it("does not migrate positions for v0.7.0+ layouts", () => {
+      // Layouts >= 0.7.0 already have internal units
+      const modernData = {
+        version: "0.7.0",
+        name: "Test Layout",
+        racks: [
+          {
+            id: "rack-1",
+            name: "Main Rack",
+            height: 42,
+            width: 19,
+            devices: [
+              {
+                id: "device-1",
+                device_type: "server-1u",
+                position: 6, // Already in internal units (U1)
+                face: "front",
+                ports: [],
+              },
+            ],
+            form_factor: "2-post",
+            starting_unit: 1,
+            position: 0,
+            desc_units: false,
+            show_rear: true,
+          },
+        ],
+        device_types: [],
+        settings: {
+          display_mode: "label",
+          show_labels_on_images: false,
+        },
+      };
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(modernData));
+
+      const loaded = loadSessionWithTimestamp();
+
+      expect(loaded).not.toBeNull();
+      // Position should remain unchanged
+      expect(loaded!.layout.racks[0].devices[0].position).toBe(6);
+    });
+
+    it("returns null for non-object parsed data", () => {
+      // Store valid JSON but not an object (array case)
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([1, 2, 3]));
+
+      // Should return null for non-object data (logs via debug logger)
+      expect(loadSessionWithTimestamp()).toBeNull();
+    });
+  });
+
+  /**
+   * The working-copy read path runs the body through LayoutSchema, the same
+   * ingress as file/server load (#2206). A body that fails schema validation
+   * must be rejected (return null), never silently bypassed. This is the one
+   * read door the schema-versioning forward-compat gate previously did not
+   * cover (#1113).
+   */
+  describe("schema validation on read", () => {
+    it("rejects a session whose body fails schema validation", () => {
+      // Wrapper looks like a valid session, but the layout omits required
+      // fields (name, device_types, settings) and would have passed the old
+      // raw-parse path untouched.
+      const invalidBody = {
+        layout: { racks: [{ id: "rack-0", name: "Test Rack" }] },
+        savedAt: "2026-02-01T12:00:00.000Z",
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(invalidBody));
+
+      expect(loadSessionWithTimestamp()).toBeNull();
+    });
+
+    it("rejects a legacy (unwrapped) body that fails schema validation", () => {
+      // A direct layout object with an invalid enum value must not slip through.
+      const invalidLegacy = {
+        version: "0.7.0",
+        name: "Test Layout",
+        racks: [createTestRack({ form_factor: "blimp" as never })],
+        device_types: [],
+        settings: { display_mode: "label", show_labels_on_images: false },
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(invalidLegacy));
+
+      expect(loadSessionWithTimestamp()).toBeNull();
+    });
+  });
+
+  /**
+   * The session records the server updatedAt it was last reconciled against so
+   * startup can tell whether a local copy is merely ahead of an unchanged server
+   * base or has genuinely diverged. Supports the echo reconciliation in #2041.
+   */
+  describe("serverUpdatedAt persistence", () => {
+    it("round-trips the server updatedAt base", () => {
+      const serverUpdatedAt = "2026-06-14T10:00:00.000Z";
+      saveSession(mockLayout, noBackup, serverUpdatedAt);
+
+      const loaded = loadSessionWithTimestamp();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.serverUpdatedAt).toBe(serverUpdatedAt);
+    });
+
+    it("defaults serverUpdatedAt to null when not passed", () => {
+      saveSession(mockLayout, noBackup);
+
+      const loaded = loadSessionWithTimestamp();
+      expect(loaded!.serverUpdatedAt).toBeNull();
+    });
+  });
+
+  /**
+   * The session records the storage mode it was saved under so startup can
+   * detect a deployment mode flip and never silently degrade. Locks #2037 AC (c).
+   */
+  describe("storage mode persistence and flip detection", () => {
+    const originalConfig = window.__RACKULA_CONFIG__;
+
+    afterEach(() => {
+      window.__RACKULA_CONFIG__ = originalConfig;
+    });
+
+    it("persists the current storage mode and round-trips it", () => {
+      window.__RACKULA_CONFIG__ = { storage: "server" };
+      saveSession(mockLayout, noBackup);
+
+      const loaded = loadSessionWithTimestamp();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.storageMode).toBe("server");
+    });
+
+    it("saves browser as the mode under browser config", () => {
+      window.__RACKULA_CONFIG__ = { storage: "browser" };
+      saveSession(mockLayout, noBackup);
+
+      const loaded = loadSessionWithTimestamp();
+      expect(loaded!.storageMode).toBe("browser");
+    });
+
+    it("defaults a legacy session without a stored mode to browser", () => {
+      // Pre-2037 sessions have no storageMode field.
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          layout: mockLayout,
+          savedAt: "2026-02-01T12:00:00.000Z",
+        }),
+      );
+
+      const loaded = loadSessionWithTimestamp();
+      expect(loaded!.storageMode).toBe("browser");
+    });
+
+    it("detects a server-to-browser flip", () => {
+      window.__RACKULA_CONFIG__ = { storage: "browser" };
+      expect(detectModeFlip("server")).toBe("server-to-browser");
+    });
+
+    it("detects a browser-to-server flip", () => {
+      window.__RACKULA_CONFIG__ = { storage: "server" };
+      expect(detectModeFlip("browser")).toBe("browser-to-server");
+    });
+
+    it("reports no flip when the modes match", () => {
+      window.__RACKULA_CONFIG__ = { storage: "browser" };
+      expect(detectModeFlip("browser")).toBe("none");
+      window.__RACKULA_CONFIG__ = { storage: "server" };
+      expect(detectModeFlip("server")).toBe("none");
+    });
+  });
+});

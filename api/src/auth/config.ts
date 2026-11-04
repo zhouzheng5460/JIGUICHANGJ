@@ -1,0 +1,541 @@
+import { betterAuth } from "better-auth";
+import { genericOAuth } from "better-auth/plugins";
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
+
+import type { EnvMap } from "../security";
+import { logger } from "../logger";
+
+const DEFAULT_BASE_URL = "http://localhost:3000";
+/**
+ * Callback path appended to RACKULA_BASE_URL when RACKULA_OIDC_REDIRECT_URI is
+ * unset. This is the path the deployment docs tell users to register with their
+ * IdP, and the only OIDC callback Rackula routes and exempts from the auth gate.
+ *
+ * Without this default, Better Auth falls back to its own convention,
+ * {baseURL}/api/auth/oauth2/callback/oidc. That path is served too, as
+ * compatibility behaviour for deployments already registered against it, but it
+ * is not the default: the docs and every IdP setup guide name /auth/callback.
+ * See #3140.
+ */
+const DEFAULT_OIDC_CALLBACK_PATH = "/auth/callback";
+/**
+ * Callback paths this app actually routes and exempts from the auth gate. Used
+ * to warn when RACKULA_OIDC_REDIRECT_URI names something else. Deliberately a
+ * warning and not a startup failure: a reverse proxy may legitimately rewrite an
+ * external callback path onto one of these (the bundled nginx maps
+ * /auth/callback onto /api/auth/callback), so the external URI need not match.
+ */
+const SERVED_OIDC_CALLBACK_PATHS = [
+  "/auth/callback",
+  "/api/auth/callback",
+  "/auth/oauth2/callback/oidc",
+  "/api/auth/oauth2/callback/oidc",
+];
+const DEFAULT_AUTH_SESSION_COOKIE_NAME = "rackula_auth_session";
+const DEFAULT_OIDC_SCOPES = ["openid", "profile", "email"];
+const OIDC_DISCOVERY_PATH = "/.well-known/openid-configuration";
+
+interface OidcDiscoveryDocument {
+  issuer: string;
+  jwksUri: string;
+  /**
+   * The asymmetric ID-token signing algorithms the provider advertises. Used
+   * to pin `jwtVerify` so an attacker cannot substitute a weaker algorithm,
+   * while still working with any provider (not just RS256). See
+   * {@link resolveIdTokenSigningAlgs}.
+   */
+  idTokenSigningAlgs: string[];
+}
+
+// OIDC providers MUST support RS256 (OpenID Connect Core 1.0, section 15.1), so
+// it is the safe fallback when discovery omits
+// id_token_signing_alg_values_supported.
+const DEFAULT_ID_TOKEN_SIGNING_ALGS = ["RS256"];
+
+// Known asymmetric JWS signing algorithms accepted for ID tokens. The token is
+// verified with the provider's public JWKS, so only public-key algorithms are
+// valid here; symmetric (`HS*`) and `none` are excluded by their absence. An
+// exact allowlist (rather than "anything that is not none/HS*") is required so
+// that an unknown or non-JWS algorithm name in discovery cannot form a
+// non-empty pin set that suppresses the RS256 fallback and breaks login (#2942).
+const KNOWN_ASYMMETRIC_JWS_ALGS = new Set([
+  "RS256",
+  "RS384",
+  "RS512",
+  "ES256",
+  "ES384",
+  "ES512",
+  "PS256",
+  "PS384",
+  "PS512",
+]);
+
+/**
+ * Resolve the ID-token signing algorithms to pin `jwtVerify` to, from the
+ * discovery document's `id_token_signing_alg_values_supported`.
+ *
+ * Pinning prevents algorithm-substitution attacks (e.g. `alg: none`). Only
+ * known asymmetric JWS algorithms ({@link KNOWN_ASYMMETRIC_JWS_ALGS}) are
+ * honoured; symmetric (`HS*`), `none`, and unrecognised names are dropped. When
+ * the provider advertises no usable asymmetric algorithm (or omits the field),
+ * fall back to RS256, which OIDC requires every provider to support (#2942).
+ */
+function resolveIdTokenSigningAlgs(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [...DEFAULT_ID_TOKEN_SIGNING_ALGS];
+  }
+
+  const algs = [
+    ...new Set(
+      value
+        .filter((alg): alg is string => typeof alg === "string")
+        .map((alg) => alg.trim()),
+    ),
+  ].filter((alg) => KNOWN_ASYMMETRIC_JWS_ALGS.has(alg));
+
+  return algs.length > 0 ? algs : [...DEFAULT_ID_TOKEN_SIGNING_ALGS];
+}
+
+interface VerifiedOidcUserInfo {
+  id: string;
+  name?: string;
+  email: string;
+  image?: string;
+  emailVerified: boolean;
+}
+
+function readEnv(env: EnvMap, key: string): string | undefined {
+  const value = env[key]?.trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
+function parseOidcScopes(raw: string | undefined): string[] {
+  if (!raw) {
+    return [...DEFAULT_OIDC_SCOPES];
+  }
+
+  const scopes = [
+    ...new Set(raw.split(/[,\s]+/).map((scope) => scope.trim())),
+  ].filter((scope) => scope.length > 0);
+
+  if (scopes.length === 0) {
+    return [...DEFAULT_OIDC_SCOPES];
+  }
+
+  if (!scopes.includes("openid")) {
+    scopes.unshift("openid");
+  }
+
+  return scopes;
+}
+
+function parseOptionalBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") {
+    return true;
+  }
+
+  if (normalized === "false") {
+    return false;
+  }
+
+  throw new Error(
+    'RACKULA_AUTH_SESSION_COOKIE_SECURE must be either "true" or "false" when set.',
+  );
+}
+
+function parseAbsoluteUrl(value: string, envName: string): URL {
+  try {
+    return new URL(value);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${envName} must be a valid absolute URL. ${reason}`, {
+      cause: error,
+    });
+  }
+}
+
+function resolveOidcDiscoveryUrl(env: EnvMap): string | undefined {
+  const discovery = readEnv(env, "RACKULA_OIDC_DISCOVERY_URL");
+  if (discovery) {
+    return parseAbsoluteUrl(discovery, "RACKULA_OIDC_DISCOVERY_URL").toString();
+  }
+
+  const issuer = readEnv(env, "RACKULA_OIDC_ISSUER");
+  if (!issuer) {
+    return undefined;
+  }
+
+  const issuerUrl = parseAbsoluteUrl(issuer, "RACKULA_OIDC_ISSUER");
+  const normalizedPath = issuerUrl.pathname.replace(/\/+$/, "");
+  if (normalizedPath.endsWith(OIDC_DISCOVERY_PATH)) {
+    issuerUrl.pathname = normalizedPath;
+    issuerUrl.search = "";
+    issuerUrl.hash = "";
+    return issuerUrl.toString();
+  }
+
+  issuerUrl.pathname = `${normalizedPath}${OIDC_DISCOVERY_PATH}`;
+  issuerUrl.search = "";
+  issuerUrl.hash = "";
+  return issuerUrl.toString();
+}
+
+function normalizeIssuerUrl(value: string): string {
+  const issuerUrl = new URL(value);
+  issuerUrl.search = "";
+  issuerUrl.hash = "";
+  const normalizedPath = issuerUrl.pathname.replace(/\/+$/, "");
+  issuerUrl.pathname = normalizedPath.length > 0 ? normalizedPath : "/";
+  return issuerUrl.toString();
+}
+
+function isMicrosoftEntraCommonIssuerMatch(
+  expectedIssuer: string,
+  discoveryIssuer: string,
+): boolean {
+  try {
+    const expected = new URL(expectedIssuer);
+    const discovery = new URL(discoveryIssuer);
+    const expectedPath = expected.pathname.replace(/\/+$/, "");
+    const discoveryPath = discovery.pathname.replace(/\/+$/, "");
+
+    if (
+      expected.protocol !== discovery.protocol ||
+      expected.hostname !== discovery.hostname ||
+      expected.port !== discovery.port
+    ) {
+      return false;
+    }
+
+    if (expected.hostname !== "login.microsoftonline.com") {
+      return false;
+    }
+
+    if (!/^\/common\/v2\.0$/i.test(expectedPath)) {
+      return false;
+    }
+
+    return /^\/[^/]+\/v2\.0$/i.test(discoveryPath);
+  } catch {
+    return false;
+  }
+}
+
+function issuerMatchesExpected(
+  expectedIssuer: string | undefined,
+  discoveryIssuer: string,
+): boolean {
+  if (!expectedIssuer) {
+    return true;
+  }
+
+  if (expectedIssuer === discoveryIssuer) {
+    return true;
+  }
+
+  return isMicrosoftEntraCommonIssuerMatch(expectedIssuer, discoveryIssuer);
+}
+
+async function fetchOidcDiscoveryDocument(
+  discoveryUrl: string,
+  expectedIssuer: string | undefined,
+): Promise<OidcDiscoveryDocument> {
+  const response = await fetch(discoveryUrl, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `OIDC discovery request failed (${response.status} ${response.statusText}).`,
+    );
+  }
+
+  const parsed = (await response.json()) as Record<string, unknown>;
+  const issuerValue = parsed.issuer;
+  const jwksUriValue = parsed.jwks_uri;
+  if (typeof issuerValue !== "string" || issuerValue.trim().length === 0) {
+    throw new Error("OIDC discovery response missing issuer.");
+  }
+
+  if (typeof jwksUriValue !== "string" || jwksUriValue.trim().length === 0) {
+    throw new Error("OIDC discovery response missing jwks_uri.");
+  }
+
+  const issuer = normalizeIssuerUrl(issuerValue);
+  if (!issuerMatchesExpected(expectedIssuer, issuer)) {
+    throw new Error(
+      "OIDC discovery issuer does not match RACKULA_OIDC_ISSUER.",
+    );
+  }
+
+  return {
+    issuer,
+    jwksUri: parseAbsoluteUrl(
+      jwksUriValue,
+      "OIDC discovery jwks_uri",
+    ).toString(),
+    idTokenSigningAlgs: resolveIdTokenSigningAlgs(
+      parsed.id_token_signing_alg_values_supported,
+    ),
+  };
+}
+
+function mapVerifiedOidcPayload(
+  payload: JWTPayload,
+): VerifiedOidcUserInfo | null {
+  const subjectValue = payload.sub;
+  const emailValue = payload.email;
+  const nameClaim = payload["name"];
+  const preferredUsernameClaim = payload["preferred_username"];
+  const pictureClaim = payload["picture"];
+  const emailVerifiedClaim = payload["email_verified"];
+  if (typeof subjectValue !== "string" || subjectValue.trim().length === 0) {
+    return null;
+  }
+
+  if (typeof emailValue !== "string" || emailValue.trim().length === 0) {
+    return null;
+  }
+
+  const nameValue =
+    typeof nameClaim === "string" && nameClaim.trim().length > 0
+      ? nameClaim.trim()
+      : typeof preferredUsernameClaim === "string" &&
+          preferredUsernameClaim.trim().length > 0
+        ? preferredUsernameClaim.trim()
+        : emailValue.trim();
+
+  const imageValue =
+    typeof pictureClaim === "string" && pictureClaim.trim().length > 0
+      ? pictureClaim.trim()
+      : undefined;
+
+  return {
+    id: subjectValue.trim(),
+    name: nameValue,
+    email: emailValue.trim().toLowerCase(),
+    image: imageValue,
+    emailVerified: emailVerifiedClaim === true,
+  };
+}
+
+function createOidcUserInfoResolver(options: {
+  discoveryUrl: string;
+  clientId: string;
+  expectedIssuer?: string;
+}) {
+  let discoveryPromise: Promise<OidcDiscoveryDocument> | undefined;
+  let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
+
+  async function resolveDiscovery(): Promise<OidcDiscoveryDocument> {
+    if (!discoveryPromise) {
+      discoveryPromise = (async () => {
+        try {
+          return await fetchOidcDiscoveryDocument(
+            options.discoveryUrl,
+            options.expectedIssuer,
+          );
+        } catch (error) {
+          discoveryPromise = undefined;
+          jwks = undefined;
+          throw error;
+        }
+      })();
+    }
+
+    return discoveryPromise;
+  }
+
+  return async (tokens: { idToken?: string | undefined }) => {
+    const idToken = tokens.idToken?.trim();
+    if (!idToken) {
+      return null;
+    }
+
+    try {
+      const discovery = await resolveDiscovery();
+      if (!jwks) {
+        jwks = createRemoteJWKSet(new URL(discovery.jwksUri));
+      }
+
+      const { payload } = await jwtVerify(idToken, jwks, {
+        issuer: discovery.issuer,
+        audience: options.clientId,
+        // Pin the accepted signing algorithms to the asymmetric set the
+        // provider advertises in discovery (RS256 fallback). Without a pin,
+        // jose accepts any algorithm the JWKS key can verify (an RSA key
+        // validates RS256/RS384/RS512 alike) and, worse, `alg: none`; pinning
+        // closes that substitution gap while still supporting providers that
+        // sign with ES*/PS*/EdDSA rather than RS256 (#2942).
+        algorithms: discovery.idTokenSigningAlgs,
+      });
+
+      return mapVerifiedOidcPayload(payload);
+    } catch (error) {
+      logger.warn({ err: error }, "OIDC ID token validation failed");
+      return null;
+    }
+  };
+}
+
+/**
+ * Better Auth configuration with stateless (cookie-only) sessions and optional OIDC.
+ *
+ * Session data is stored in signed/encrypted cookies with no database backend.
+ * This eliminates server-side session storage while providing sessions that survive
+ * container restarts (stored in browser cookies, not server memory).
+ *
+ * OIDC authentication uses the genericOAuth plugin with auto-discovery via
+ * the provider's .well-known/openid-configuration endpoint. Works with any
+ * OIDC-compliant provider (Authentik, Authelia, Keycloak, etc.).
+ *
+ * Environment variables:
+ * - RACKULA_AUTH_SESSION_SECRET: HMAC secret for signing session cookies (required, min 32 chars)
+ * - RACKULA_OIDC_ISSUER: OIDC provider base URL (e.g. https://auth.example.com/application/o/rackula/)
+ * - RACKULA_OIDC_DISCOVERY_URL: Explicit OIDC discovery document URL (optional override)
+ * - RACKULA_OIDC_CLIENT_ID: OAuth client ID
+ * - RACKULA_OIDC_CLIENT_SECRET: OAuth client secret
+ * - RACKULA_OIDC_REDIRECT_URI: OAuth callback URL (optional, defaults to RACKULA_BASE_URL + /auth/callback)
+ * - RACKULA_OIDC_SCOPES: Optional scopes (comma or space-separated), defaults to openid profile email
+ * - RACKULA_BASE_URL: Base URL for callback construction (defaults to http://localhost:3000)
+ */
+function warnIfRedirectPathUnserved(redirectUri: string): void {
+  let pathname: string;
+  try {
+    pathname = new URL(redirectUri).pathname;
+  } catch {
+    logger.warn(
+      { redirectUri },
+      "RACKULA_OIDC_REDIRECT_URI is not a valid absolute URL. OIDC login will not complete.",
+    );
+    return;
+  }
+
+  if (SERVED_OIDC_CALLBACK_PATHS.includes(pathname)) {
+    return;
+  }
+
+  logger.warn(
+    { redirectUri, servedPaths: SERVED_OIDC_CALLBACK_PATHS },
+    "RACKULA_OIDC_REDIRECT_URI points at a path this app does not serve. Unless a reverse proxy rewrites it onto one of the served callback paths, the identity provider's callback cannot create a session and login will fail.",
+  );
+}
+
+export function createAuth(secret: string, env: EnvMap = process.env) {
+  if (!secret) {
+    throw new Error(
+      "Auth session secret is required. Set RACKULA_AUTH_SESSION_SECRET.",
+    );
+  }
+
+  const oidcClientId = readEnv(env, "RACKULA_OIDC_CLIENT_ID");
+  const oidcClientSecret = readEnv(env, "RACKULA_OIDC_CLIENT_SECRET");
+  const oidcDiscoveryUrl = resolveOidcDiscoveryUrl(env);
+  const oidcIssuer = readEnv(env, "RACKULA_OIDC_ISSUER");
+  const oidcScopes = parseOidcScopes(readEnv(env, "RACKULA_OIDC_SCOPES"));
+  const authSessionCookieName =
+    readEnv(env, "RACKULA_AUTH_SESSION_COOKIE_NAME") ||
+    DEFAULT_AUTH_SESSION_COOKIE_NAME;
+  const baseURL = readEnv(env, "RACKULA_BASE_URL") || DEFAULT_BASE_URL;
+  // A trailing slash would yield "https://host//auth/callback", which an IdP
+  // treats as a different URI than the one the operator registered.
+  const defaultOidcRedirectUri = `${baseURL.replace(/\/+$/, "")}${DEFAULT_OIDC_CALLBACK_PATH}`;
+  const authSessionCookieSecure =
+    parseOptionalBoolean(readEnv(env, "RACKULA_AUTH_SESSION_COOKIE_SECURE")) ??
+    env.NODE_ENV === "production";
+
+  const plugins = [];
+  if (oidcClientId && oidcClientSecret) {
+    if (!oidcDiscoveryUrl) {
+      throw new Error(
+        "OIDC is enabled but no discovery URL is configured. Set RACKULA_OIDC_DISCOVERY_URL or RACKULA_OIDC_ISSUER.",
+      );
+    }
+
+    const hasExplicitDiscoveryUrl = !!readEnv(
+      env,
+      "RACKULA_OIDC_DISCOVERY_URL",
+    );
+    if (hasExplicitDiscoveryUrl && !oidcIssuer) {
+      throw new Error(
+        "RACKULA_OIDC_DISCOVERY_URL requires RACKULA_OIDC_ISSUER to be set for issuer pinning. " +
+          "Without issuer validation, a compromised discovery endpoint could redirect to a malicious provider.",
+      );
+    }
+
+    const oidcRedirectUri =
+      readEnv(env, "RACKULA_OIDC_REDIRECT_URI") ?? defaultOidcRedirectUri;
+    warnIfRedirectPathUnserved(oidcRedirectUri);
+
+    plugins.push(
+      genericOAuth({
+        config: [
+          {
+            providerId: "oidc",
+            clientId: oidcClientId,
+            clientSecret: oidcClientSecret,
+            discoveryUrl: oidcDiscoveryUrl,
+            scopes: oidcScopes,
+            pkce: true,
+            redirectURI: oidcRedirectUri,
+            getUserInfo: createOidcUserInfoResolver({
+              discoveryUrl: oidcDiscoveryUrl,
+              clientId: oidcClientId,
+              expectedIssuer: oidcIssuer
+                ? normalizeIssuerUrl(oidcIssuer)
+                : undefined,
+            }),
+          },
+        ],
+      }),
+    );
+  }
+
+  return betterAuth({
+    // Omitting database config enables stateless mode (cookie-only sessions)
+    // Session data stored in signed cookies, no database queries for validation
+    secret,
+    baseURL,
+
+    session: {
+      // 12 hours session lifetime (shorter than Better Auth default of 7 days)
+      expiresIn: 60 * 60 * 12,
+
+      // Refresh session when 6 hours remain
+      updateAge: 60 * 60 * 6,
+
+      // Cookie cache for performance optimization
+      cookieCache: {
+        enabled: true,
+        maxAge: 300, // 5-minute cache
+      },
+    },
+
+    advanced: {
+      useSecureCookies: authSessionCookieSecure,
+      cookies: {
+        session_token: {
+          name: authSessionCookieName,
+        },
+      },
+      defaultCookieAttributes: {
+        httpOnly: true, // Prevent XSS access to cookie
+        sameSite: "lax", // CSRF protection
+        secure: authSessionCookieSecure,
+        // domain: '.racku.la' // Uncomment if using subdomains
+      },
+    },
+
+    plugins,
+  });
+}
+
+export type Auth = ReturnType<typeof createAuth>;

@@ -1,0 +1,624 @@
+/**
+ * Rackula Design Tokens
+ * Three-layer token system for consistent styling
+ */
+
+/* ============================================================
+   LAYER 1: PRIMITIVES (Raw Values)
+   ============================================================ */
+
+:root {
+  /* Color scheme declaration for browser chrome and form controls */
+  color-scheme: dark;
+
+  /* Spacing Scale (4px base) */
+  --space-0: 0;
+  --space-0-5: 0.125rem; /* 2px - for very compact elements */
+  --space-1: 0.25rem; /* 4px */
+  --space-1-5: 0.375rem; /* 6px */
+  --space-2: 0.5rem; /* 8px */
+  --space-3: 0.75rem; /* 12px */
+  --space-4: 1rem; /* 16px */
+  --space-5: 1.25rem; /* 20px */
+  --space-6: 1.5rem; /* 24px */
+  --space-8: 2rem; /* 32px */
+  --space-10: 2.5rem; /* 40px */
+  --space-12: 3rem; /* 48px */
+
+  /* Color Palette - Neutrals */
+  --neutral-50: #fafafa;
+  --neutral-100: #f4f4f5;
+  --neutral-200: #e4e4e7;
+  --neutral-300: #d4d4d8;
+  --neutral-400: #a1a1aa;
+  --neutral-500: #71717a;
+  --neutral-600: #52525b;
+  --neutral-700: #3f3f46;
+  --neutral-800: #27272a;
+  --neutral-900: #18181b;
+  --neutral-950: #09090b;
+
+  /* --------------------------------------------------------------------------
+	   DRACULA THEME PRIMITIVES
+	   Official Dracula color palette: https://draculatheme.com/spec
+	   -------------------------------------------------------------------------- */
+
+  /* Dracula Backgrounds */
+  --dracula-bg-darkest: #191a21;
+  --dracula-bg-darker: #21222c;
+  --dracula-bg: #282a36;
+  --dracula-bg-light: #343746;
+  --dracula-bg-lighter: #424450;
+  --dracula-selection: #44475a;
+
+  /* Dracula Text */
+  --dracula-foreground: #f8f8f2;
+  --dracula-comment: #6272a4;
+
+  /* Dracula Accents */
+  --dracula-purple: #bd93f9;
+  --dracula-pink: #ff79c6;
+  --dracula-pink-muted: #c45b9a; /* Softer pink for button backgrounds */
+  --dracula-cyan: #8be9fd;
+  --dracula-green: #50fa7b;
+  --dracula-orange: #ffb86c;
+  --dracula-red: #ff5555;
+  --dracula-yellow: #f1fa8c;
+
+  /* Color Palette - Blue (Primary) */
+  --blue-500: #3b82f6;
+
+  /* Color Palette - Red (Error) */
+  --red-500: #ef4444;
+
+  /* Color Palette - Green (Success) */
+  --green-500: #22c55e;
+
+  /* Color Palette - Amber (Warning) */
+  --amber-500: #f59e0b;
+
+  /* Color Palette - Emerald (Network interfaces) */
+  --emerald-500: #10b981;
+
+  /* Color Palette - Purple (Network interfaces) */
+  --purple-500: #8b5cf6;
+
+  /* Color Palette - Pink (Network interfaces) */
+  --pink-500: #ec4899;
+
+  /* Typography - Font Families (Dracula Brand) */
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  /* Legacy aliases for backwards compatibility */
+  --font-family: var(--font-sans);
+  --font-family-mono: var(--font-mono);
+
+  /* Typography Scale */
+  --font-size-2xs: 0.625rem; /* 10px */
+  --font-size-xs: 0.6875rem; /* 11px */
+  --font-size-sm: 0.8125rem; /* 13px */
+  --font-size-base: 0.875rem; /* 14px */
+  --font-size-md: 1rem; /* 16px */
+  --font-size-lg: 1.125rem; /* 18px */
+  --font-size-xl: 1.25rem; /* 20px */
+  --font-size-2xl: 1.5rem; /* 24px */
+
+  /* Font Weights */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Letter Spacing */
+  --letter-spacing-tight: -0.025em;
+  --letter-spacing-normal: 0;
+  --letter-spacing-wide: 0.05em; /* For uppercase labels/headers */
+
+  /* Icon Sizes */
+  --icon-size-xs: 14px;
+  --icon-size-sm: 16px;
+  --icon-size-md: 20px;
+  --icon-size-lg: 24px;
+  --icon-size-xl: 28px;
+  --icon-size-2xl: 48px;
+
+  /* Line Heights */
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+
+  /* Border Radius */
+  --radius-sm: 0.25rem; /* 4px */
+  --radius-md: 0.375rem; /* 6px */
+  --radius-lg: 0.5rem; /* 8px */
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg:
+    0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+  /* Animation Timing */
+  --duration-fast: 100ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+
+  /* Animation Easing */
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+
+  /* Responsive Breakpoints */
+  --breakpoint-mobile: 1024px;
+}
+
+/* ============================================================
+   LAYER 2: SEMANTIC TOKENS — Dark Theme (Dracula)
+   Maps primitives to UI purposes
+   ============================================================ */
+
+:root {
+  /* Backgrounds */
+  --colour-bg: var(--dracula-bg);
+  --colour-bg-darker: var(--dracula-bg-darker);
+  --colour-surface: var(--dracula-bg-light);
+  --colour-surface-raised: var(--dracula-bg-lighter);
+  --colour-surface-hover: var(--dracula-bg-lighter);
+  --colour-surface-active: var(--dracula-selection);
+
+  /* Overlays */
+  --colour-backdrop: rgba(0, 0, 0, 0.6);
+  --colour-dialog-bg: var(--dracula-bg-darker);
+  --colour-surface-overlay: var(
+    --dracula-bg-darker
+  ); /* Dark overlay for menus/tooltips */
+  --colour-text-inverse: #ffffff; /* White text on dark overlays */
+  --colour-text-muted-inverse: rgba(
+    255,
+    255,
+    255,
+    0.6
+  ); /* Muted white text on overlays */
+  --colour-overlay-hover: rgba(
+    255,
+    255,
+    255,
+    0.1
+  ); /* Hover state on dark overlays */
+  --colour-overlay-border: rgba(
+    255,
+    255,
+    255,
+    0.1
+  ); /* Borders/separators on overlays */
+  --colour-shortcut-bg: rgba(
+    255,
+    255,
+    255,
+    0.15
+  ); /* Keyboard shortcut badge background on overlays */
+
+  /* Text */
+  --colour-text: var(--dracula-foreground);
+  --colour-text-muted: #bbbbbb; /* WCAG AA: clears 4.5:1 on every dark surface (4.77:1 on #44475a, the lightest) */
+  --colour-text-disabled: var(--dracula-comment);
+
+  /* Borders */
+  --colour-border: var(--dracula-selection);
+  --colour-border-hover: var(--dracula-comment);
+  --colour-border-focus: var(
+    --dracula-pink
+  ); /* BRAND.md v0.6.0: pink for focus */
+
+  /* Interactive/Brand */
+  --colour-primary: var(--dracula-cyan);
+  --colour-selection: var(
+    --dracula-pink
+  ); /* BRAND.md v0.6.0: pink (not purple) */
+  --colour-selection-hover: var(--dracula-pink);
+  --colour-focus-ring: var(
+    --dracula-pink
+  ); /* BRAND.md v0.6.0: pink for focus */
+  --colour-brand-on-light: #644ac9; /* Purple for brand text on a fixed white surface (e.g. the share QR panel). Darker than --dracula-purple so it clears WCAG AA 4.5:1 on white; --dracula-purple only reaches 2.41:1 there. */
+
+  /* Buttons */
+  --colour-button-bg: var(--dracula-bg-light);
+  --colour-button-hover: var(--dracula-bg-lighter);
+  --colour-button-primary: var(
+    --dracula-pink-muted
+  ); /* Softer pink for CTA background */
+  --colour-button-primary-hover: var(--dracula-pink); /* Bright pink on hover */
+  --colour-button-destructive: #a84a4a; /* Muted red for destructive actions (BRAND.md power color) */
+  --colour-button-destructive-hover: var(
+    --dracula-red
+  ); /* Bright red on hover */
+  --colour-text-on-primary: #ffffff;
+
+  /* Feedback States */
+  --colour-success: var(--dracula-green);
+  --colour-warning: var(--dracula-orange);
+  --colour-error: var(--dracula-red);
+  --colour-info: var(--dracula-cyan);
+
+  /* Feedback State Backgrounds (10% opacity for subtle wash) */
+  --colour-warning-bg: rgba(255, 184, 108, 0.1);
+  --colour-error-bg: rgba(255, 85, 85, 0.1);
+
+  /* Drag and Drop */
+  --colour-dnd-valid: var(--dracula-green);
+  --colour-dnd-valid-bg: rgba(80, 250, 123, 0.1);
+  --colour-dnd-invalid: var(--dracula-red);
+  --colour-dnd-invalid-bg: rgba(255, 85, 85, 0.1);
+  --colour-dnd-dragging: var(--dracula-cyan);
+
+  /* Airflow Visualization */
+  --colour-airflow-intake: var(--dracula-cyan);
+  --colour-airflow-exhaust: var(--dracula-red);
+  --colour-airflow-passive: var(--dracula-comment);
+  --colour-airflow-conflict: var(--dracula-orange);
+
+  /* Port/Interface Indicators */
+  --colour-port-1gbe: var(--emerald-500);
+  --colour-port-10gbe: var(--blue-500);
+  --colour-port-sfpp: var(--purple-500);
+  --colour-port-sfp28: var(--amber-500);
+  --colour-port-qsfpp: var(--red-500);
+  --colour-port-qsfp28: var(--pink-500);
+  --colour-port-console: var(--neutral-400);
+  --colour-port-power: var(--dracula-orange);
+  --colour-port-av: var(--dracula-yellow);
+  --colour-port-default: var(--neutral-500);
+  --colour-port-stroke: rgba(0, 0, 0, 0.3);
+  --colour-port-indicator: white;
+  --colour-port-hover: rgba(255, 255, 255, 0.2);
+  --shadow-port-text: 0 0.5px 1px rgba(0, 0, 0, 0.5);
+
+  /* Glow Effects - Dracula style neon glows */
+  --glow-cyan-sm: 0 0 12px rgba(139, 233, 253, 0.3);
+  --glow-cyan-md: 0 0 20px rgba(139, 233, 253, 0.3);
+  --glow-cyan-lg: 0 0 30px rgba(139, 233, 253, 0.3);
+
+  --glow-purple-sm: 0 0 12px rgba(189, 147, 249, 0.3);
+  --glow-purple-md: 0 0 20px rgba(189, 147, 249, 0.3);
+  --glow-purple-lg: 0 0 30px rgba(189, 147, 249, 0.3);
+
+  /* Pink glow for selection/focus (BRAND.md v0.6.0) */
+  --glow-pink-sm: 0 0 12px rgba(255, 121, 198, 0.3);
+  --glow-pink-md: 0 0 20px rgba(255, 121, 198, 0.3);
+
+  --glow-green-sm: 0 0 12px rgba(46, 204, 113, 0.3);
+
+  /* Focus ring with glow (BRAND.md v0.6.0: pink) */
+  --focus-ring-glow:
+    0 0 0 2px var(--colour-bg), 0 0 0 4px var(--colour-focus-ring),
+    var(--glow-pink-sm);
+}
+
+/* ============================================================
+   LAYER 3: COMPONENT TOKENS
+   ============================================================ */
+
+:root {
+  /* Canvas */
+  --canvas-bg: var(--dracula-bg-darkest);
+
+  /* Rack */
+  --rack-u-height: 17.78px; /* 1U height in scaled pixels */
+  --rack-width: 482.6px; /* 19" rack width */
+  --rack-rail-width: 30px;
+  --rack-padding: 16px;
+  --rack-bg: var(--dracula-bg-darker);
+  --rack-rail: var(--dracula-bg-lighter);
+  --rack-interior: var(--dracula-bg);
+  --rack-slot: rgba(255, 255, 255, 0.02);
+  --rack-slot-alt: rgba(255, 255, 255, 0.04);
+  --rack-grid: var(--dracula-bg-light);
+  --rack-text: var(--dracula-comment); /* U label text */
+  --rack-text-highlight: var(
+    --dracula-foreground
+  ); /* Highlighted U labels (multiples of 5) */
+
+  /* Blocked Slots (dual-view mode) - crosshatch pattern for half-depth conflicts
+     Uses visual texture (crosshatch + icon) not just color for accessibility */
+  --colour-blocked-stroke: rgba(239, 68, 68, 0.45); /* Crosshatch line stroke */
+  --colour-blocked-bg: rgba(239, 68, 68, 0.12); /* Subtle red wash background */
+  --colour-blocked-icon: rgba(239, 68, 68, 0.7); /* Directional arrow icon */
+
+  /* Valid placement-slot highlight (counterpart to the blocked-slot tokens).
+     Base hue only; callers derive alpha with color-mix so the pink lives in
+     one place and the pulse animation can vary opacity. */
+  --colour-placement-valid: var(--dracula-pink);
+
+  /* Toolbar */
+  --toolbar-height: 48px;
+  --toolbar-bg: var(--dracula-bg-darker);
+  --toolbar-border: var(--dracula-bg-light);
+
+  /* Side Panel (right edit panel) */
+  --side-panel-width: 320px;
+
+  /* Drawer */
+  --drawer-width: 320px;
+  --drawer-bg: var(--dracula-bg-darker);
+
+  /* Sidebar (fixed). Both side panels share the same fixed width and the same
+     44px collapsed strip on their outer edge (issue #2397). */
+  --sidebar-width: 320px;
+  --panel-collapsed-strip-width: 44px;
+  /* Width of the PanelEdgeGrip hit strip (#2553), floated on each panel's
+     canvas-facing seam clear of panel content (#2560). It is a secondary
+     affordance: the always-visible 44px tab-row chevron is the WCAG 2.2
+     target-size control, so the strip can be compact and intrude minimally on
+     the canvas. */
+  --panel-edge-grip-width: var(--space-3);
+  --colour-sidebar-bg: var(--dracula-bg-darker);
+  --colour-surface-secondary: var(--dracula-bg-light);
+
+  /* Tabs (raised "layered sheet" treatment, issue #2396).
+     Shared across the layout, sidebar, and side-panel tab rows. The active tab
+     reads as the top sheet in a stack: it lifts to --colour-tab-active-bg (the
+     content surface below it), drops its bottom edge to merge into that surface,
+     and carries a purple top accent. Inactive tabs sit recessed and muted. */
+  --colour-tab-active-bg: var(--colour-surface);
+  --colour-tab-inactive-bg: var(--colour-bg-darker);
+  --colour-tab-accent: var(--dracula-purple);
+  --tab-radius: var(--radius-lg); /* 8px top corners */
+  --tab-accent-height: 2px;
+  --shadow-tab-active: 0 2px 6px rgba(0, 0, 0, 0.25);
+
+  /* Z-Index Layers */
+  --z-toolbar: 20;
+  /* Canvas overlays: anchored to the canvas, must sit under the side panels so
+     a panel occludes them where they overlap (#2491). */
+  --z-placement-indicator: 50;
+  --z-verb-bar: 50;
+  /* Onboarding drag hint: above the verb bar so a rack auto-selected on first
+     run (verb bar showing rack actions) never hides the hint behind it
+     (#3004/R27c). */
+  --z-hint: 55;
+  /* Side panels: persistent chrome that flanks the canvas. Above the canvas
+     overlays, below the drawer/modal/dropdown layers. */
+  --z-sidebar: 60;
+  /* Toolbar popovers (e.g. the storage chip details popover) portal to the body
+     and must sit above the side panels so a panel never occludes them (#2645).
+     Below the drawer/modal layers, which the passive chip popover never coexists
+     with. */
+  --z-popover: 70;
+  --z-drawer-backdrop: 99;
+  --z-drawer: 100;
+  --z-fab: 100;
+  --z-bottom-nav: 100;
+  --z-dropdown: 250; /* Above drawer AND modal - toolbar menus must appear above edit panel */
+  --z-bottom-sheet: 200;
+  --z-modal: 200;
+  --z-toast: 300;
+  --z-tooltip: 400; /* Above toast for hover tooltips */
+
+  /* Touch Targets (WCAG 2.5.5 Level AAA - minimum 44×44px, we use 48px) */
+  --touch-target-min: 48px;
+  --touch-target-comfortable: 56px;
+
+  /* Bottom Navigation (Framework7-inspired) */
+  --bottom-nav-height: 64px;
+  --bottom-nav-icon-size: 28px;
+  --bottom-nav-label-size: var(--font-size-2xs);
+  --bottom-nav-bg: rgba(33, 34, 44, 0.85);
+  --bottom-nav-border: rgba(52, 55, 70, 0.6);
+  --bottom-nav-blur: 20px;
+  --verb-bar-bg: rgba(33, 34, 44, 0.92);
+  /* Specular glass: translucent body lets devices show through; the rim and
+     sheen sell it as a lens. Dark theme uses a lighter top edge for the
+     highlight and a soft dark bottom for grounding. */
+  --verb-bar-bg-solid: rgba(33, 34, 44, 0.97);
+  --verb-bar-backdrop: blur(16px) saturate(1.6);
+  --verb-bar-border: rgba(248, 248, 242, 0.3);
+  --verb-bar-rim:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.28);
+  --verb-bar-sheen: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(255, 255, 255, 0.02) 38%,
+    rgba(255, 255, 255, 0) 60%
+  );
+  --bottom-nav-active-pill-bg: rgba(139, 233, 253, 0.12);
+  --bottom-nav-active-colour: var(--colour-primary);
+  --bottom-nav-inactive-colour: var(--colour-text-muted);
+  --bottom-nav-transition: 400ms;
+  --bottom-nav-pill-radius: 16px;
+
+  /* Overlays & Shadows */
+  --colour-backdrop: rgba(0, 0, 0, 0.5);
+  --shadow-sheet: 0 -4px 20px rgba(0, 0, 0, 0.15);
+  --shadow-indicator: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-fab: 0 4px 12px rgba(0, 0, 0, 0.3), 0 2px 4px rgba(0, 0, 0, 0.2);
+  --shadow-fab-hover:
+    0 6px 16px rgba(0, 0, 0, 0.35), 0 3px 6px rgba(0, 0, 0, 0.25);
+  --colour-button-overlay: rgba(0, 0, 0, 0.1);
+  --colour-button-overlay-hover: rgba(0, 0, 0, 0.2);
+
+  /* Dialog Widths */
+  --dialog-width-default: 400px;
+  --dialog-width-md: 460px;
+
+  /* Form Inputs */
+  --input-bg: var(--dracula-bg-light);
+  --input-border: var(--dracula-selection);
+  --input-placeholder: var(--dracula-comment);
+  --input-width-custom: 80px;
+
+  /* Buttons */
+  --button-bg: var(--dracula-bg-light);
+  --button-bg-hover: var(--dracula-bg-lighter);
+  --button-border: var(--dracula-selection);
+
+  /* Device */
+  --device-font-size: var(--font-size-xs);
+  --device-padding: var(--space-2);
+  --device-radius: var(--radius-sm);
+  --device-ghost-opacity: 0.5;
+
+  /* Toast */
+  --toast-bg: var(--dracula-bg-light);
+  --toast-border: var(--dracula-selection);
+  --toast-radius: var(--radius-md);
+
+  /* Logo - Brand colours */
+  --logo-frame: var(--dracula-selection);
+  --logo-interior: var(--dracula-bg-light);
+
+  /* Danger button hover state */
+  --colour-error-hover: #cc4444;
+
+  /* Drag Tooltip */
+  --drag-tooltip-width: 160px;
+  --drag-tooltip-max-width: 140px;
+  --drag-tooltip-border-width: var(--space-1); /* 4px */
+  --drag-tooltip-base-height: var(--space-6); /* 24px */
+  --drag-tooltip-height-per-u: 0.875rem; /* 14px - height added per additional U */
+
+  /* Environment Badge (DEV/LOCAL indicator) */
+  --env-badge-bg: rgba(255, 85, 85, 0.1);
+  --env-badge-text: var(--dracula-red);
+  --env-badge-gradient-highlight: var(--dracula-pink);
+  --anim-env-cylon: 6s;
+}
+
+/* ============================================================
+   APP COLOUR THEMES (Settings > Appearance)
+   Five interface colour schemes. The default (no attribute or
+   "dracula") is the stock Dracula palette above; the blocks
+   below override the DRACULA THEME PRIMITIVES so every semantic
+   / component token re-derives automatically.
+   ============================================================ */
+
+/* 深海蓝 Ocean Blue */
+:root[data-app-theme="ocean"] {
+  color-scheme: dark;
+
+  --dracula-bg-darkest: #0b1220;
+  --dracula-bg-darker: #0f172a;
+  --dracula-bg: #111b2e;
+  --dracula-bg-light: #1a2740;
+  --dracula-bg-lighter: #24344f;
+  --dracula-selection: #2c3e5c;
+
+  --dracula-foreground: #e6edf7;
+  --dracula-comment: #64748b;
+
+  --dracula-purple: #60a5fa;
+  --dracula-pink: #38bdf8;
+  --dracula-pink-muted: #2576a8;
+  --dracula-cyan: #7dd3fc;
+  --dracula-green: #4ade80;
+  --dracula-orange: #fbbf24;
+  --dracula-red: #f87171;
+  --dracula-yellow: #fde047;
+
+  --colour-text-muted: #a3b2c7;
+}
+
+/* 森林绿 Forest Green */
+:root[data-app-theme="forest"] {
+  color-scheme: dark;
+
+  --dracula-bg-darkest: #0c1410;
+  --dracula-bg-darker: #101b15;
+  --dracula-bg: #13241b;
+  --dracula-bg-light: #1b3326;
+  --dracula-bg-lighter: #254534;
+  --dracula-selection: #2d5340;
+
+  --dracula-foreground: #e8f5ee;
+  --dracula-comment: #6b8f7d;
+
+  --dracula-purple: #6ee7b7;
+  --dracula-pink: #34d399;
+  --dracula-pink-muted: #22795a;
+  --dracula-cyan: #a7f3d0;
+  --dracula-green: #86efac;
+  --dracula-orange: #fbbf24;
+  --dracula-red: #f87171;
+  --dracula-yellow: #fef08a;
+
+  --colour-text-muted: #a8c4b5;
+}
+
+/* 落日橙 Sunset Orange */
+:root[data-app-theme="sunset"] {
+  color-scheme: dark;
+
+  --dracula-bg-darkest: #1a1008;
+  --dracula-bg-darker: #22160c;
+  --dracula-bg: #2a1c10;
+  --dracula-bg-light: #382617;
+  --dracula-bg-lighter: #47311e;
+  --dracula-selection: #543923;
+
+  --dracula-foreground: #fdf3e7;
+  --dracula-comment: #a08664;
+
+  --dracula-purple: #fbbf24;
+  --dracula-pink: #fb923c;
+  --dracula-pink-muted: #b5641f;
+  --dracula-cyan: #fcd34d;
+  --dracula-green: #a3e635;
+  --dracula-orange: #f97316;
+  --dracula-red: #ef4444;
+  --dracula-yellow: #fde047;
+
+  --colour-text-muted: #c4b29a;
+}
+
+/* 晨雾浅 Morning Mist (light) */
+:root[data-app-theme="mist"] {
+  color-scheme: light;
+
+  --dracula-bg-darkest: #dde1e9;
+  --dracula-bg-darker: #e6e9f0;
+  --dracula-bg: #f2f4f8;
+  --dracula-bg-light: #ffffff;
+  --dracula-bg-lighter: #f7f8fb;
+  --dracula-selection: #d3d9e4;
+
+  --dracula-foreground: #1f2430;
+  --dracula-comment: #6b7280;
+
+  --dracula-purple: #7c3aed;
+  --dracula-pink: #db2777;
+  --dracula-pink-muted: #be185d;
+  --dracula-cyan: #0891b2;
+  --dracula-green: #16a34a;
+  --dracula-orange: #d97706;
+  --dracula-red: #dc2626;
+  --dracula-yellow: #ca8a04;
+
+  --colour-text-muted: #4b5563;
+  --colour-backdrop: rgba(15, 23, 42, 0.35);
+  --colour-text-inverse: #1f2430;
+  --colour-text-muted-inverse: rgba(31, 36, 48, 0.6);
+  --colour-overlay-hover: rgba(31, 36, 48, 0.08);
+  --colour-overlay-border: rgba(31, 36, 48, 0.12);
+  --colour-shortcut-bg: rgba(31, 36, 48, 0.1);
+  --colour-port-stroke: rgba(255, 255, 255, 0.6);
+  --rack-slot: rgba(0, 0, 0, 0.02);
+  --rack-slot-alt: rgba(0, 0, 0, 0.04);
+
+  /* 悬浮胶囊（视图控制 / 历史控制 / 3D 启动球 / 动词条）在浅色下改用白玻璃底，
+     默认这些 token 是硬编码的深色 rgba，不会随语义层自适应。 */
+  --bottom-nav-bg: rgba(255, 255, 255, 0.86);
+  --bottom-nav-border: rgba(31, 36, 48, 0.14);
+  --verb-bar-bg: rgba(255, 255, 255, 0.92);
+  --verb-bar-bg-solid: rgba(255, 255, 255, 0.97);
+  --verb-bar-border: rgba(31, 36, 48, 0.18);
+  --verb-bar-rim:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.75),
+    inset 0 -1px 0 0 rgba(31, 36, 48, 0.1);
+  --verb-bar-sheen: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.6) 0%,
+    rgba(255, 255, 255, 0.12) 38%,
+    rgba(255, 255, 255, 0) 60%
+  );
+}

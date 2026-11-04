@@ -1,0 +1,46 @@
+import { defineConfig, devices } from "@playwright/test";
+
+/**
+ * Playwright configuration for running E2E tests against the Vite dev server.
+ *
+ * Use this config during development for faster feedback loop:
+ * - No build step required
+ * - Uses Vite's HMR for quick iteration
+ *
+ * Note: Dev server uses native ESM (no chunking), so it won't catch
+ * ESM initialization order bugs. Use the production config (playwright.config.ts)
+ * to test bundled output.
+ *
+ * @example
+ * npm run test:e2e:dev
+ */
+export default defineConfig({
+  webServer: {
+    command: "npm run dev",
+    port: 5173,
+    reuseExistingServer: !process.env.CI,
+    cwd: "..",
+  },
+  testDir: ".",
+  // visual-regression.spec.ts and axe.spec.ts have their own configs
+  // (playwright.visual.config.ts, playwright.a11y.config.ts).
+  testIgnore: ["**/visual-regression.spec.ts", "**/axe.spec.ts"],
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: 0,
+  reporter: [["list"], ["html", { open: "never" }]],
+  use: {
+    baseURL: "http://localhost:5173",
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    actionTimeout: 10_000,
+    navigationTimeout: 30_000,
+  },
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+    },
+    // Only chromium for dev - full browser matrix uses production config
+  ],
+});

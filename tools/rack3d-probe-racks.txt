@@ -1,0 +1,345 @@
+﻿=== NOTES ===
+canvas box: {"x":953.8125,"y":151.5,"width":393.1875,"height":701.5}
+
+--- debugProbe rx=0.15 ry=0.5 ---
+{
+ "camera": "ortho",
+ "lineThreshold": 1,
+ "cameraPos": [
+  0,
+  0.502,
+  2.947
+ ],
+ "target": [
+  0,
+  0.267,
+  0
+ ],
+ "racks": [
+  {
+   "id": "rack-1",
+   "groupX": -0.291,
+   "hitCount": 194,
+   "first": [
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    }
+   ]
+  },
+  {
+   "id": "rack-2",
+   "groupX": 0.291,
+   "hitCount": 169,
+   "first": [
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    }
+   ]
+  }
+ ]
+}
+
+--- debugProbe rx=0.5 ry=0.5 ---
+{
+ "camera": "ortho",
+ "lineThreshold": 1,
+ "cameraPos": [
+  0,
+  0.502,
+  2.947
+ ],
+ "target": [
+  0,
+  0.267,
+  0
+ ],
+ "racks": [
+  {
+   "id": "rack-1",
+   "groupX": -0.291,
+   "hitCount": 193,
+   "first": [
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    }
+   ]
+  },
+  {
+   "id": "rack-2",
+   "groupX": 0.291,
+   "hitCount": 169,
+   "first": [
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    }
+   ]
+  }
+ ]
+}
+
+--- debugProbe rx=0.85 ry=0.5 ---
+{
+ "camera": "ortho",
+ "lineThreshold": 1,
+ "cameraPos": [
+  0,
+  0.502,
+  2.947
+ ],
+ "target": [
+  0,
+  0.267,
+  0
+ ],
+ "racks": [
+  {
+   "id": "rack-1",
+   "groupX": -0.291,
+   "hitCount": 193,
+   "first": [
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    }
+   ]
+  },
+  {
+   "id": "rack-2",
+   "groupX": 0.291,
+   "hitCount": 170,
+   "first": [
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    },
+    {
+     "distance": 2.436,
+     "type": "LineSegments",
+     "visible": true,
+     "rackId": null,
+     "deviceId": null,
+     "tick": false
+    }
+   ]
+  }
+ ]
+}
+鍛戒腑鐐规€绘暟: 0
+鎸夊垪鍛戒腑鏁? 0.06:0 0.09:0 0.12:0 0.15:0 0.18:0 0.21:0 0.24:0 0.27:0 0.3:0 0.33:0 0.36:0 0.39:0 0.42:0 0.45:0 0.48:0 0.51:0 0.54:0 0.57:0 0.6:0 0.63:0 0.66:0 0.69:0 0.72:0 0.75:0 0.78:0 0.81:0 0.84:0 0.87:0 0.9:0 0.93:0
+甯冨眬娲诲姩鏈烘煖: null
+
+=== ERRORS (0) ===
+
+

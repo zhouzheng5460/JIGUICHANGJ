@@ -1,0 +1,34 @@
+name: Auto-add to Project
+
+on:
+  issues:
+    types: [opened]
+
+permissions: {} # Uses PAT for project access, not GITHUB_TOKEN
+
+jobs:
+  add-to-project:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+        id: add-to-project
+        with:
+          project-url: https://github.com/orgs/RackulaLives/projects/2
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+
+      - name: Set status for milestone-assigned issues
+        if: ${{ github.event.issue.milestone != null }}
+        env:
+          PROJECT_ID: PVT_kwDODv3FSs4BLc_R
+          STATUS_FIELD_ID: PVTSSF_lADODv3FSs4BLc_Rzg7BbqY
+          NEXT_UP_OPTION_ID: 5d5cb62e
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          ITEM_ID="${{ steps.add-to-project.outputs.itemId }}"
+          if [ -n "$ITEM_ID" ]; then
+            gh project item-edit \
+              --id "$ITEM_ID" \
+              --project-id "$PROJECT_ID" \
+              --field-id "$STATUS_FIELD_ID" \
+              --single-select-option-id "$NEXT_UP_OPTION_ID"
+          fi

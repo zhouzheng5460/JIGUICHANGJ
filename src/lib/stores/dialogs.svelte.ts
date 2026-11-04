@@ -1,0 +1,222 @@
+/**
+ * Centralized dialog state management
+ *
+ * Provides a single source of truth for all dialog/sheet open states.
+ * Handlers live in DialogOrchestrator.svelte (dialog/sheet UI) and App.svelte (triggers).
+ * The $lib/storage manager also opens the load dialog, and $lib/utils/app-actions
+ * opens the cleanupPrompt, export, and share dialogs.
+ *
+ * Only one dialog can be open at a time (enforced by using single openDialog state).
+ * Sheets (mobile bottom sheets) use a separate state since they coexist with dialogs.
+ */
+
+import { getToastStore } from "./toast.svelte";
+
+export type DialogId =
+  | "addDevice"
+  | "confirmDelete"
+  | "export"
+  | "share"
+  | "help"
+  | "settings"
+  | "importNetBox"
+  | "confirmReplace"
+  | "cleanupDialog"
+  | "cleanupPrompt"
+  | "yamlEditor"
+  | "load"
+  | "commandPalette";
+
+export type SheetId =
+  | "deviceDetails"
+  | "deviceLibrary"
+  | "rackEdit"
+  | "layouts"
+  | "racks"
+  | "view"
+  | "yamlEditor";
+
+export interface DeleteTarget {
+  /**
+   * Racks are the only target the confirm-delete dialog gates now; device
+   * removal is immediate with an undo toast instead (#2993). The literal type
+   * is kept (rather than dropped) so a future second confirm-gated target
+   * type doesn't need every call site re-touched.
+   */
+  type: "rack";
+  name: string;
+  /**
+   * Rack identity captured at dialog-open time (#2918). Confirming the
+   * dialog must act on this snapshot, not the live selectionStore, so a
+   * selection change between open and confirm can't delete a different
+   * rack than the one named in the dialog. For a group delete (see
+   * groupRackIds below), this is the anchor rack's own ID (the rack
+   * selected when the group delete was triggered), not the group's ID.
+   */
+  rackId: string;
+  /**
+   * Present only for a whole-bayed-group delete (EditPanelRack's "Delete
+   * Bayed Rack" button, #2994 fold-in): every rack the confirm will delete,
+   * captured at open time for the same reason rackId is. handleConfirmDelete
+   * resolves the live group from this snapshot's anchor rack and deletes it
+   * and every member in one atomic deleteBayedGroup batch, rather than
+   * looping deleteRack() per member; DialogOrchestrator sums their live
+   * device counts for the confirm message. Undefined for every other
+   * rack-deletion affordance (context menu, delete key, verb bar, edit
+   * panel's plain "Delete Rack"), where rackId alone is authoritative.
+   */
+  groupRackIds?: string[];
+}
+
+// Dialog state
+let openDialog = $state<DialogId | null>(null);
+let deleteTarget = $state<DeleteTarget | null>(null);
+let exportQrCodeDataUrl = $state<string | undefined>(undefined);
+/** Pre-selected rack IDs for export dialog (from context menu) */
+let exportSelectedRackIds = $state<string[] | undefined>(undefined);
+/**
+ * Pre-fills the add-device dialog's name field (set by the device palette's
+ * empty search state "Create custom device named <query>" action, #3007/R28a).
+ */
+let pendingDeviceName = $state<string | null>(null);
+/** Pending operation that triggered cleanup prompt (save or export) */
+let pendingCleanupOperation = $state<"save" | "saveAs" | "export" | null>(null);
+
+// Mobile sheet state
+let openSheet = $state<SheetId | null>(null);
+let selectedDeviceIndex = $state<number | null>(null);
+
+/**
+ * Open a dialog by ID. Closes any other open dialog and any open sheet so
+ * dialogs always render without a sheet underneath them. On mobile this
+ * prevents the device-details bottom sheet from occluding a confirm dialog
+ * that opens on top of it (#2490).
+ *
+ * Also dismisses any toast currently on screen (#3004/R27a): a toast left
+ * over from a prior action (e.g. "Device duplicated") must never linger and
+ * cover this dialog's controls, including a destructive confirm's Cancel
+ * button. This only fires once, at the open transition, so a toast raised by
+ * an action taken inside this dialog after it opens (e.g. Share's "Link
+ * copied") is unaffected.
+ */
+function open(id: DialogId) {
+  getToastStore().clearAllToasts();
+  openSheet = null;
+  selectedDeviceIndex = null;
+  openDialog = id;
+}
+
+/**
+ * Close the current dialog and reset associated state.
+ */
+function close() {
+  openDialog = null;
+  deleteTarget = null;
+  exportQrCodeDataUrl = undefined;
+  exportSelectedRackIds = undefined;
+  pendingCleanupOperation = null;
+  pendingDeviceName = null;
+}
+
+/**
+ * Check if a specific dialog is currently open.
+ */
+function isOpen(id: DialogId): boolean {
+  return openDialog === id;
+}
+
+/**
+ * Open a mobile sheet by ID. Clears any lingering non-undo toast on the
+ * closed-to-open transition (#3030), so a toast left over from a prior
+ * action can't cover a nav sheet's controls (Layouts/Racks/Devices/View,
+ * deviceDetails), same as open()'s dialog-open clear (#3004/R27a). Only
+ * fires when no sheet was already open: nav sheets swap frequently (tab
+ * switches, selecting a different device while deviceDetails is already
+ * showing), and re-clearing on every one of those redundant/same-state
+ * calls would eat a toast the user still wants to see. Unlike open(), an
+ * isUndoAffordance toast is exempt, since sheets don't block it the way a
+ * modal dialog does and it already auto-dismisses on its own.
+ */
+function openSheetById(id: SheetId, deviceIndex?: number) {
+  if (openSheet === null) {
+    getToastStore().clearNonUndoToasts();
+  }
+  openSheet = id;
+  if (deviceIndex !== undefined) {
+    selectedDeviceIndex = deviceIndex;
+  }
+}
+
+/**
+ * Close the current mobile sheet.
+ */
+function closeSheet() {
+  openSheet = null;
+  selectedDeviceIndex = null;
+}
+
+/**
+ * Check if a specific sheet is currently open.
+ */
+function isSheetOpen(id: SheetId): boolean {
+  return openSheet === id;
+}
+
+// Export the dialog store
+export const dialogStore = {
+  // Dialog state getters
+  get openDialog() {
+    return openDialog;
+  },
+  get deleteTarget() {
+    return deleteTarget;
+  },
+  set deleteTarget(value: DeleteTarget | null) {
+    deleteTarget = value;
+  },
+  get exportQrCodeDataUrl() {
+    return exportQrCodeDataUrl;
+  },
+  set exportQrCodeDataUrl(value: string | undefined) {
+    exportQrCodeDataUrl = value;
+  },
+  get exportSelectedRackIds() {
+    return exportSelectedRackIds;
+  },
+  set exportSelectedRackIds(value: string[] | undefined) {
+    exportSelectedRackIds = value;
+  },
+  get pendingDeviceName() {
+    return pendingDeviceName;
+  },
+  set pendingDeviceName(value: string | null) {
+    pendingDeviceName = value;
+  },
+  get pendingCleanupOperation() {
+    return pendingCleanupOperation;
+  },
+  set pendingCleanupOperation(value: "save" | "saveAs" | "export" | null) {
+    pendingCleanupOperation = value;
+  },
+
+  // Dialog actions
+  open,
+  close,
+  isOpen,
+
+  // Sheet state getters
+  get currentSheet() {
+    return openSheet;
+  },
+  get selectedDeviceIndex() {
+    return selectedDeviceIndex;
+  },
+  set selectedDeviceIndex(value: number | null) {
+    selectedDeviceIndex = value;
+  },
+
+  // Sheet actions
+  openSheet: openSheetById,
+  closeSheet,
+  isSheetOpen,
+};

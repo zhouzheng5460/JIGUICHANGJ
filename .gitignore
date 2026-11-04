@@ -1,0 +1,116 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-worker/
+
+# Cloudflare Workers / wrangler
+.wrangler/
+
+# Vite cache
+.vite/
+
+# TypeScript
+*.tsbuildinfo
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.AppleDB
+.AppleDesktop
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.apdisk
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm/
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+reports/
+
+# Visual regression baselines are committed for Linux (the CI runner) only.
+# Local runs on macOS/Windows write platform-suffixed copies we never commit.
+e2e/**/__screenshots__/**/*-darwin.png
+e2e/**/__screenshots__/**/*-win32.png
+
+# BrowserStack
+log/
+local.log
+browserstackSetupConfig.json
+playwright-browserstack-sdk.config.temp.json
+playwright-browserstack-sdk.config.ts
+
+# Claude Code - track commands/skills, ignore local settings
+.claude/settings.local.json
+.claude/plans/
+.planning/
+docs/planning/
+
+# Git worktrees
+.worktree/
+.worktrees/
+.claude/worktrees/
+
+# Claude Memory - auto-generated context files (preserve root /CLAUDE.md)
+**/CLAUDE.md
+!/CLAUDE.md
+
+# Claude Superpowers
+.superpowers/
+
+# Auto-generated tooling config
+.gh-dash.yml
+.claude/scheduled_tasks.lock
+
+# Claude spike checkpoints (session artifacts, not source)
+.claude/spike-*-checkpoint.yaml
+
+# Codex
+.codex/
+.agents/
+
+# ---- 交割精简：原始素材与本地调试产物不入库 ----
+assets-source/
+verify-out/
+tools/_*
+tools/*.png
+tmp_*
+_*.txt
+_*.json
+_*.log
+*.out
+v[0-9]-*.png

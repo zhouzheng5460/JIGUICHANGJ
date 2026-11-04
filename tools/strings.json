@@ -1,0 +1,3254 @@
+{
+ "fileCount": 155,
+ "total": 812,
+ "strings": [
+  [
+   "currentColor",
+   50
+  ],
+  [
+   "Enter",
+   25
+  ],
+  [
+   "x2=",
+   18
+  ],
+  [
+   "y1=",
+   18
+  ],
+  [
+   "y2=",
+   18
+  ],
+  [
+   "fill=",
+   15
+  ],
+  [
+   "Cancel",
+   12
+  ],
+  [
+   "cy=",
+   12
+  ],
+  [
+   "Delete",
+   9
+  ],
+  [
+   ", label:",
+   8
+  ],
+  [
+   "Escape",
+   8
+  ],
+  [
+   "Racks",
+   8
+  ],
+  [
+   "Add device...",
+   7
+  ],
+  [
+   "commandPalette",
+   7
+  ],
+  [
+   "Delete Rack",
+   7
+  ],
+  [
+   "Edit",
+   7
+  ],
+  [
+   "FFFFFF",
+   7
+  ],
+  [
+   "Height",
+   7
+  ],
+  [
+   "Layouts",
+   7
+  ],
+  [
+   "Notes",
+   7
+  ],
+  [
+   "saveAs",
+   7
+  ],
+  [
+   "View",
+   7
+  ],
+  [
+   "height=",
+   6
+  ],
+  [
+   "Name",
+   6
+  ],
+  [
+   "rackEdit",
+   6
+  ],
+  [
+   "rx=",
+   6
+  ],
+  [
+   "Saved",
+   6
+  ],
+  [
+   "transform-box: fill-box; transform-origin: 50% 50%;",
+   6
+  ],
+  [
+   "Width",
+   6
+  ],
+  [
+   "Bayed Rack",
+   5
+  ],
+  [
+   "Blank layout",
+   5
+  ],
+  [
+   "Category",
+   5
+  ],
+  [
+   "Devices",
+   5
+  ],
+  [
+   "helper-text error",
+   5
+  ],
+  [
+   "New layout",
+   5
+  ],
+  [
+   "noopener noreferrer",
+   5
+  ],
+  [
+   "Previous layout kept in Layouts",
+   5
+  ],
+  [
+   "REAR",
+   5
+  ],
+  [
+   "Undo",
+   5
+  ],
+  [
+   "void; ondevicedrop?: ( event: CustomEvent",
+   5
+  ],
+  [
+   "void; ondevicemove?: ( event: CustomEvent",
+   5
+  ],
+  [
+   "void; ondevicemoverack?: ( event: CustomEvent",
+   5
+  ],
+  [
+   "void; ondeviceselect?: ( event: CustomEvent",
+   5
+  ],
+  [
+   "width=",
+   5
+  ],
+  [
+   "Zoom in",
+   5
+  ],
+  [
+   "Zoom out",
+   5
+  ],
+  [
+   "Add device",
+   4
+  ],
+  [
+   "Add notes about this rack...",
+   4
+  ],
+  [
+   "Annotations",
+   4
+  ],
+  [
+   "Collapse panel",
+   4
+  ],
+  [
+   "context-menu-item context-menu-item--destructive",
+   4
+  ],
+  [
+   "Delete Device Type",
+   4
+  ],
+  [
+   "Drag right to bay a new rack",
+   4
+  ],
+  [
+   "Drag right to create a bayed rack",
+   4
+  ],
+  [
+   "Export",
+   4
+  ],
+  [
+   "Fit all",
+   4
+  ],
+  [
+   "FRONT",
+   4
+  ],
+  [
+   "History actions",
+   4
+  ],
+  [
+   "Layout YAML",
+   4
+  ],
+  [
+   "New Rack",
+   4
+  ],
+  [
+   "Preview",
+   4
+  ],
+  [
+   "Rackula",
+   4
+  ],
+  [
+   "Redo",
+   4
+  ],
+  [
+   "Remove",
+   4
+  ],
+  [
+   "Replace this layout?",
+   4
+  ],
+  [
+   "Settings",
+   4
+  ],
+  [
+   "stop-color=",
+   4
+  ],
+  [
+   "type=",
+   4
+  ],
+  [
+   "Add a rack",
+   3
+  ],
+  [
+   "Can't place device here",
+   3
+  ],
+  [
+   "cleanupDialog",
+   3
+  ],
+  [
+   "Colour",
+   3
+  ],
+  [
+   "Command palette",
+   3
+  ],
+  [
+   "confirmReplace",
+   3
+  ],
+  [
+   "Custom only",
+   3
+  ],
+  [
+   "Delete bayed rack",
+   3
+  ],
+  [
+   "Delete from Library",
+   3
+  ],
+  [
+   "Delete rack",
+   3
+  ],
+  [
+   "Duplicate",
+   3
+  ],
+  [
+   "Edit Rack",
+   3
+  ],
+  [
+   "Export first",
+   3
+  ],
+  [
+   "form-group checkbox-group",
+   3
+  ],
+  [
+   "Full",
+   3
+  ],
+  [
+   "Half",
+   3
+  ],
+  [
+   "Has image",
+   3
+  ],
+  [
+   "Hide",
+   3
+  ],
+  [
+   "Home",
+   3
+  ],
+  [
+   "input-field textarea",
+   3
+  ],
+  [
+   "Last saved",
+   3
+  ],
+  [
+   "Layout name",
+   3
+  ],
+  [
+   "Network",
+   3
+  ],
+  [
+   "New layout (new tab)",
+   3
+  ],
+  [
+   "Pinned devices",
+   3
+  ],
+  [
+   "Rack",
+   3
+  ],
+  [
+   "Rename",
+   3
+  ],
+  [
+   "Retry",
+   3
+  ],
+  [
+   "Server",
+   3
+  ],
+  [
+   "Show",
+   3
+  ],
+  [
+   "Show Rear View",
+   3
+  ],
+  [
+   "Show rear view on canvas",
+   3
+  ],
+  [
+   "storage-details-note storage-details-warn",
+   3
+  ],
+  [
+   "Unknown",
+   3
+  ],
+  [
+   "validation complete, hasErrors=%o",
+   3
+  ],
+  [
+   "'s starter-template menu (#2829). The",
+   2
+  ],
+  [
+   "(null); let longPressTarget = $state",
+   2
+  ],
+  [
+   "= 1 && newHeight",
+   2
+  ],
+  [
+   "1 device",
+   2
+  ],
+  [
+   "1 rack",
+   2
+  ],
+  [
+   "About Rackula",
+   2
+  ],
+  [
+   "Add bay",
+   2
+  ],
+  [
+   "Add Device",
+   2
+  ],
+  [
+   "Add notes about this device placement...",
+   2
+  ],
+  [
+   "Add notes about this placement",
+   2
+  ],
+  [
+   "addDevice",
+   2
+  ],
+  [
+   "Additional notes about the device...",
+   2
+  ],
+  [
+   "All Devices",
+   2
+  ],
+  [
+   "Annotation Field",
+   2
+  ],
+  [
+   "ArrowDown",
+   2
+  ],
+  [
+   "ArrowLeft",
+   2
+  ],
+  [
+   "ArrowRight",
+   2
+  ],
+  [
+   "ArrowUp",
+   2
+  ],
+  [
+   "AV/Media",
+   2
+  ],
+  [
+   "Back to commands",
+   2
+  ],
+  [
+   "Backspace",
+   2
+  ],
+  [
+   "Banana for scale",
+   2
+  ],
+  [
+   "Banana for scale (approximately 7 inches)",
+   2
+  ],
+  [
+   "Bay count controls",
+   2
+  ],
+  [
+   "Blank Panel",
+   2
+  ],
+  [
+   "Brand",
+   2
+  ],
+  [
+   "Browser",
+   2
+  ],
+  [
+   "btn btn-secondary",
+   2
+  ],
+  [
+   "Cable Management",
+   2
+  ],
+  [
+   "Cancel placement",
+   2
+  ],
+  [
+   "Chassis",
+   2
+  ],
+  [
+   "Clean Up Device Library",
+   2
+  ],
+  [
+   "Clean Up Device Library?",
+   2
+  ],
+  [
+   "Clear",
+   2
+  ],
+  [
+   "Clear all devices from rack",
+   2
+  ],
+  [
+   "Clear Rack",
+   2
+  ],
+  [
+   "Clear search",
+   2
+  ],
+  [
+   "Close",
+   2
+  ],
+  [
+   "Close dialog",
+   2
+  ],
+  [
+   "Close layout",
+   2
+  ],
+  [
+   "command-item command-item--lead",
+   2
+  ],
+  [
+   "Commands",
+   2
+  ],
+  [
+   "Compatible devices only",
+   2
+  ],
+  [
+   "confirmDelete",
+   2
+  ],
+  [
+   "Cooling",
+   2
+  ],
+  [
+   "Copy link to clipboard",
+   2
+  ],
+  [
+   "Copy YAML",
+   2
+  ],
+  [
+   "Corrupted file",
+   2
+  ],
+  [
+   "Custom hex colour",
+   2
+  ],
+  [
+   "Delete from library",
+   2
+  ],
+  [
+   "Delete layout",
+   2
+  ],
+  [
+   "Delete Layout",
+   2
+  ],
+  [
+   "Delete Layout?",
+   2
+  ],
+  [
+   "Deselect All",
+   2
+  ],
+  [
+   "Device",
+   2
+  ],
+  [
+   "deviceDetails",
+   2
+  ],
+  [
+   "deviceLibrary",
+   2
+  ],
+  [
+   "Dismiss hint",
+   2
+  ],
+  [
+   "Dismiss notification",
+   2
+  ],
+  [
+   "dispatch rack context menu rackId=%s point=%o hasTarget=%s",
+   2
+  ],
+  [
+   "Display mode",
+   2
+  ],
+  [
+   "Display Mode",
+   2
+  ],
+  [
+   "Download YAML",
+   2
+  ],
+  [
+   "Drag to resize. Arrow Up grows, Arrow Down shrinks.",
+   2
+  ],
+  [
+   "e.g. 192.168.1.10",
+   2
+  ],
+  [
+   "e.g., 192.168.1.100",
+   2
+  ],
+  [
+   "e.g., Dell PowerEdge R740",
+   2
+  ],
+  [
+   "Edit and view panel",
+   2
+  ],
+  [
+   "Edit display name",
+   2
+  ],
+  [
+   "Edit name",
+   2
+  ],
+  [
+   "Enable bayed racks",
+   2
+  ],
+  [
+   "Export...",
+   2
+  ],
+  [
+   "Exporting...",
+   2
+  ],
+  [
+   "fact-value fact-value-icon",
+   2
+  ],
+  [
+   "Failed to process image",
+   2
+  ],
+  [
+   "Firewall",
+   2
+  ],
+  [
+   "From template",
+   2
+  ],
+  [
+   "Front",
+   2
+  ],
+  [
+   "Front Image",
+   2
+  ],
+  [
+   "Full Depth",
+   2
+  ],
+  [
+   "Generic",
+   2
+  ],
+  [
+   "generics=",
+   2
+  ],
+  [
+   "Half Width",
+   2
+  ],
+  [
+   "Half-depth device",
+   2
+  ],
+  [
+   "Half-depth: Mounts on one face only",
+   2
+  ],
+  [
+   "Half-width device",
+   2
+  ],
+  [
+   "Half-width: Mounts inside a carrier, not directly on the rails",
+   2
+  ],
+  [
+   "Image",
+   2
+  ],
+  [
+   "Image + Label",
+   2
+  ],
+  [
+   "Import devices file",
+   2
+  ],
+  [
+   "Import from NetBox",
+   2
+  ],
+  [
+   "Import input mode",
+   2
+  ],
+  [
+   "Include legend",
+   2
+  ],
+  [
+   "Include sharing QR code",
+   2
+  ],
+  [
+   "Invalid file",
+   2
+  ],
+  [
+   "Label",
+   2
+  ],
+  [
+   "Layout library",
+   2
+  ],
+  [
+   "Layout too large for QR code",
+   2
+  ],
+  [
+   "Layout YAML editor",
+   2
+  ],
+  [
+   "Layouts, racks and devices panel",
+   2
+  ],
+  [
+   "Load Layout",
+   2
+  ],
+  [
+   "Manufacturer",
+   2
+  ],
+  [
+   "menu-content menu-inline",
+   2
+  ],
+  [
+   "Mobile navigation",
+   2
+  ],
+  [
+   "Move device down by 1 rack unit",
+   2
+  ],
+  [
+   "Move device up by 1 rack unit",
+   2
+  ],
+  [
+   "Move down 1U",
+   2
+  ],
+  [
+   "Move up 1U",
+   2
+  ],
+  [
+   "New from template",
+   2
+  ],
+  [
+   "New layout options",
+   2
+  ],
+  [
+   "Next rack",
+   2
+  ],
+  [
+   "Open layout",
+   2
+  ],
+  [
+   "Open layouts",
+   2
+  ],
+  [
+   "Other",
+   2
+  ],
+  [
+   "Panel sections",
+   2
+  ],
+  [
+   "Patch Panel",
+   2
+  ],
+  [
+   "Position",
+   2
+  ],
+  [
+   "Power",
+   2
+  ],
+  [
+   "Previous rack",
+   2
+  ],
+  [
+   "Prompt to clean up unused types",
+   2
+  ],
+  [
+   "Pull to bay",
+   2
+  ],
+  [
+   "QR code for layout",
+   2
+  ],
+  [
+   "qr-message qr-error",
+   2
+  ],
+  [
+   "Rack list",
+   2
+  ],
+  [
+   "Rack navigation",
+   2
+  ],
+  [
+   "Rack width in inches",
+   2
+  ],
+  [
+   "Read-only",
+   2
+  ],
+  [
+   "Rear",
+   2
+  ],
+  [
+   "Rear Image",
+   2
+  ],
+  [
+   "Release to bay",
+   2
+  ],
+  [
+   "Remove bay",
+   2
+  ],
+  [
+   "Remove from rack",
+   2
+  ],
+  [
+   "Remove image",
+   2
+  ],
+  [
+   "Rename Layout",
+   2
+  ],
+  [
+   "Replace",
+   2
+  ],
+  [
+   "Replace Current Rack?",
+   2
+  ],
+  [
+   "Reset to default colour",
+   2
+  ],
+  [
+   "Restore from backup (.zip)",
+   2
+  ],
+  [
+   "Save",
+   2
+  ],
+  [
+   "Save First",
+   2
+  ],
+  [
+   "Search",
+   2
+  ],
+  [
+   "Search devices",
+   2
+  ],
+  [
+   "Search devices...",
+   2
+  ],
+  [
+   "Search or run a command",
+   2
+  ],
+  [
+   "Select All",
+   2
+  ],
+  [
+   "Share Layout",
+   2
+  ],
+  [
+   "Shelf",
+   2
+  ],
+  [
+   "Show snapshots",
+   2
+  ],
+  [
+   "Sidebar navigation",
+   2
+  ],
+  [
+   "skip rack context menu: device target rackId=%s point=%o",
+   2
+  ],
+  [
+   "Starter templates",
+   2
+  ],
+  [
+   "Storage",
+   2
+  ],
+  [
+   "Test Dialog",
+   2
+  ],
+  [
+   "Toggle display mode",
+   2
+  ],
+  [
+   "Transparent background",
+   2
+  ],
+  [
+   "U Numbering",
+   2
+  ],
+  [
+   "U numbering direction",
+   2
+  ],
+  [
+   "U position labels",
+   2
+  ],
+  [
+   "U1 at bottom",
+   2
+  ],
+  [
+   "Unknown error",
+   2
+  ],
+  [
+   "Unused device types",
+   2
+  ],
+  [
+   "View actions",
+   2
+  ],
+  [
+   "void; /** Mobile long press for rack editing */ onlongpress?: (event: CustomEvent",
+   2
+  ],
+  [
+   "void; /** Mobile tap-to-place event */ onplacementtap?: ( event: CustomEvent",
+   2
+  ],
+  [
+   "Warn on unsaved changes",
+   2
+  ],
+  [
+   "Working...",
+   2
+  ],
+  [
+   "yamlEditor",
+   2
+  ],
+  [
+   "Your open layout is safe. Retry to list the rest.",
+   2
+  ],
+  [
+   "Zoom controls",
+   2
+  ],
+  [
+   ", label: '10",
+   1
+  ],
+  [
+   ", label: '19",
+   1
+  ],
+  [
+   ", label: '23",
+   1
+  ],
+  [
+   ", rear",
+   1
+  ],
+  [
+   ", selected",
+   1
+  ],
+  [
+   "; // Default to 19",
+   1
+  ],
+  [
+   "; // Single",
+   1
+  ],
+  [
+   "; let pendingLayout = $state",
+   1
+  ],
+  [
+   "( null, ); let previewError = $state",
+   1
+  ],
+  [
+   "(\"dark\"); let exportView = $state",
+   1
+  ],
+  [
+   "(\"png\"); let includeLegend = $state(false); let background = $state",
+   1
+  ],
+  [
+   "(); const geometry = new SvelteMap",
+   1
+  ],
+  [
+   "([]); let loading = $state(true); let error = $state",
+   1
+  ],
+  [
+   "([]); let pendingToastId = $state",
+   1
+  ],
+  [
+   "([]); let snapshotsLoading = $state(false); let snapshotsError = $state",
+   1
+  ],
+  [
+   "(getDefaultRackWidthOption()); let userChangedColour = $state(false); // Image state (v0.1.0) let frontImage = $state",
+   1
+  ],
+  [
+   "(inferred)",
+   1
+  ],
+  [
+   "(null); // --- Context menu state --- let contextMenuOpen = $state(false); let contextMenuTarget = $state",
+   1
+  ],
+  [
+   "(null); // Preview overrides let categoryOverride = $state",
+   1
+  ],
+  [
+   "(null); // Rename dialog state. Keyed by the row's stable key. let renameOpen = $state(false); let renameRowKey = $state",
+   1
+  ],
+  [
+   "(null); let batchTimeout = $state",
+   1
+  ],
+  [
+   "(null); let canvasLongPressTarget = $state",
+   1
+  ],
+  [
+   "(null); let colourOverride = $state",
+   1
+  ],
+  [
+   "(null); let confirmingDeleteId = $state",
+   1
+  ],
+  [
+   "(null); let containerHoverInfo = $state",
+   1
+  ],
+  [
+   "(null); let deletingId = $state",
+   1
+  ],
+  [
+   "(null); let depthError = $state",
+   1
+  ],
+  [
+   "(null); let dragOverId = $state",
+   1
+  ],
+  [
+   "(null); let longPressProgress = $state(0); let longPressActive = $state(false); let longPressPoint = $state",
+   1
+  ],
+  [
+   "(null); let longPressTriggerElement = $state",
+   1
+  ],
+  [
+   "(null); let nameInputElement = $state",
+   1
+  ],
+  [
+   "(null); let pos = $state",
+   1
+  ],
+  [
+   "(null); let previewDimensions = $state",
+   1
+  ],
+  [
+   "(null); let qrError = $state",
+   1
+  ],
+  [
+   "(null); let restoringFilename = $state",
+   1
+  ],
+  [
+   "(null); let schemaError = $state",
+   1
+  ],
+  [
+   "(null); let showConflictPrompt = $state(false); let latestYamlAtConflict = $state",
+   1
+  ],
+  [
+   "(null); let snapshots = $state",
+   1
+  ],
+  [
+   "(null); let userChangedColour = $state(false); let rackWidthSelection = $state",
+   1
+  ],
+  [
+   "(null); let validationTimer: ReturnType",
+   1
+  ],
+  [
+   "(null); let weightError = $state",
+   1
+  ],
+  [
+   "(null); type ParsedYaml = Awaited",
+   1
+  ],
+  [
+   "(prefers-reduced-motion: reduce)",
+   1
+  ],
+  [
+   "(undefined); let rearImage = $state",
+   1
+  ],
+  [
+   "[data-dialog-safe-action]",
+   1
+  ],
+  [
+   "[data-slot-id]",
+   1
+  ],
+  [
+   "][data-device-face=",
+   1
+  ],
+  [
+   "&& password !==",
+   1
+  ],
+  [
+   "&darr;",
+   1
+  ],
+  [
+   "&mdash; too long for some browsers; download the file instead",
+   1
+  ],
+  [
+   "&times;",
+   1
+  ],
+  [
+   "&uarr;",
+   1
+  ],
+  [
+   "= 22px, so 1",
+   1
+  ],
+  [
+   "= dropPreview.position && uPosition",
+   1
+  ],
+  [
+   "= MIN_DEVICE_HEIGHT && val",
+   1
+  ],
+  [
+   "| null = null; let svgElement: SVGSVGElement | null = $state(null); let dropPreview = $state",
+   1
+  ],
+  [
+   "| undefined; let colourSaved = $state(false); let colourSavedTimeout: ReturnType",
+   1
+  ],
+  [
+   "| undefined; let ipSaved = $state(false); let ipSavedTimeout: ReturnType",
+   1
+  ],
+  [
+   "| undefined; let notesSaved = $state(false); let notesSavedTimeout: ReturnType",
+   1
+  ],
+  [
+   "|| format ===",
+   1
+  ],
+  [
+   "0 ? viewportHeight : itemHeight * (overscan * 2 + 1), ); const visibleWindow = $derived",
+   1
+  ],
+  [
+   "0 && selectedCount",
+   1
+  ],
+  [
+   "1, ); let useDots = $derived(layoutStore.racks.length",
+   1
+  ],
+  [
+   "½D",
+   1
+  ],
+  [
+   "½W",
+   1
+  ],
+  [
+   "100GbE QSFP28",
+   1
+  ],
+  [
+   "10GbE (RJ45)",
+   1
+  ],
+  [
+   "10GbE SFP+",
+   1
+  ],
+  [
+   "19\" (Standard)",
+   1
+  ],
+  [
+   "1GbE (RJ45)",
+   1
+  ],
+  [
+   "1GbE SFP",
+   1
+  ],
+  [
+   "25GbE SFP28",
+   1
+  ],
+  [
+   "4-post cabinet",
+   1
+  ],
+  [
+   "40GbE QSFP+",
+   1
+  ],
+  [
+   "A copy already exists on the server",
+   1
+  ],
+  [
+   "a server is reachable",
+   1
+  ],
+  [
+   "A storage server is available",
+   1
+  ],
+  [
+   "action-button fit-button",
+   1
+  ],
+  [
+   "actions actions-centered",
+   1
+  ],
+  [
+   "ADAT Optical",
+   1
+  ],
+  [
+   "Add",
+   1
+  ],
+  [
+   "Add a device called '<query>'",
+   1
+  ],
+  [
+   "Add a device to get started",
+   1
+  ],
+  [
+   "Add a rack to control its rear view.",
+   1
+  ],
+  [
+   "Add custom device",
+   1
+  ],
+  [
+   "add device",
+   1
+  ],
+  [
+   "added to Devices`,",
+   1
+  ],
+  [
+   "AES3",
+   1
+  ],
+  [
+   "Airflow:",
+   1
+  ],
+  [
+   "All devices in this rack will be removed",
+   1
+  ],
+  [
+   "All instances will be removed",
+   1
+  ],
+  [
+   "An unexpected error occurred. Please try again.",
+   1
+  ],
+  [
+   "Appearance",
+   1
+  ],
+  [
+   "Apply anyway",
+   1
+  ],
+  [
+   "apply started, intent=%d",
+   1
+  ],
+  [
+   "Apply YAML",
+   1
+  ],
+  [
+   "Applying...",
+   1
+  ],
+  [
+   "ArrowUp ArrowDown",
+   1
+  ],
+  [
+   "Asset Tag",
+   1
+  ],
+  [
+   "Auto-saved",
+   1
+  ],
+  [
+   "back off",
+   1
+  ],
+  [
+   "Backed",
+   1
+  ],
+  [
+   "Banana for scale (7 inches)",
+   1
+  ],
+  [
+   "Base Weight",
+   1
+  ],
+  [
+   "Base weight must be zero or a positive number.",
+   1
+  ],
+  [
+   "Bay Count",
+   1
+  ],
+  [
+   "Bay rack",
+   1
+  ],
+  [
+   "Bayed racks must share the same height.",
+   1
+  ],
+  [
+   "bayed-row front-row",
+   1
+  ],
+  [
+   "bayed-row rear-row",
+   1
+  ],
+  [
+   "Behaviour",
+   1
+  ],
+  [
+   "Bidirectional",
+   1
+  ],
+  [
+   "blocked-slot blocked-slot-bg",
+   1
+  ],
+  [
+   "blocked-slot blocked-slot-pattern",
+   1
+  ],
+  [
+   "Both",
+   1
+  ],
+  [
+   "Both (full-depth)",
+   1
+  ],
+  [
+   "Both Faces",
+   1
+  ],
+  [
+   "Branch",
+   1
+  ],
+  [
+   "brand-icon brand-icon-fallback",
+   1
+  ],
+  [
+   "btn btn-choose",
+   1
+  ],
+  [
+   "btn btn-clear",
+   1
+  ],
+  [
+   "btn btn-remove",
+   1
+  ],
+  [
+   "Build info copied",
+   1
+  ],
+  [
+   "Built",
+   1
+  ],
+  [
+   "button, a, [role='button'], input, select, textarea",
+   1
+  ],
+  [
+   "Cancel edits",
+   1
+  ],
+  [
+   "Choose a .yaml or .yml file",
+   1
+  ],
+  [
+   "Choose File",
+   1
+  ],
+  [
+   "Choose how to proceed to avoid overwriting newer layout changes by mistake.",
+   1
+  ],
+  [
+   "Clean up unused device types",
+   1
+  ],
+  [
+   "cleanupPrompt",
+   1
+  ],
+  [
+   "Clear filters",
+   1
+  ],
+  [
+   "Click a slot to place. Esc to cancel.",
+   1
+  ],
+  [
+   "close",
+   1
+  ],
+  [
+   "Commit",
+   1
+  ],
+  [
+   "Confirm before leaving with unsaved work.",
+   1
+  ],
+  [
+   "conflict detected, baselineYaml differs from latestYaml",
+   1
+  ],
+  [
+   "Consolas",
+   1
+  ],
+  [
+   "Console",
+   1
+  ],
+  [
+   "Container",
+   1
+  ],
+  [
+   "Container U",
+   1
+  ],
+  [
+   "Content-Type",
+   1
+  ],
+  [
+   "control-group control-group--history",
+   1
+  ],
+  [
+   "control, shared by the tab-bar",
+   1
+  ],
+  [
+   "Create a layout to get started",
+   1
+  ],
+  [
+   "Create custom device",
+   1
+  ],
+  [
+   "Create your first rack to get started",
+   1
+  ],
+  [
+   "CSV (Spreadsheet)",
+   1
+  ],
+  [
+   "Ctrl+D",
+   1
+  ],
+  [
+   "custom",
+   1
+  ],
+  [
+   "Custom:",
+   1
+  ],
+  [
+   "Dante",
+   1
+  ],
+  [
+   "Dark",
+   1
+  ],
+  [
+   "Data",
+   1
+  ],
+  [
+   "DB25 (TASCAM)",
+   1
+  ],
+  [
+   "Del",
+   1
+  ],
+  [
+   "Delete Bayed Rack",
+   1
+  ],
+  [
+   "Delete unused device type",
+   1
+  ],
+  [
+   "Depth",
+   1
+  ],
+  [
+   "Depth (mm)",
+   1
+  ],
+  [
+   "Depth must be a positive number in millimetres.",
+   1
+  ],
+  [
+   "detail-section info-section",
+   1
+  ],
+  [
+   "detail-section name-section",
+   1
+  ],
+  [
+   "detail-section notes-section",
+   1
+  ],
+  [
+   "detail-section optional-section",
+   1
+  ],
+  [
+   "DEV -",
+   1
+  ],
+  [
+   "Device actions",
+   1
+  ],
+  [
+   "Device deselected, closing bottom sheet and fitting all",
+   1
+  ],
+  [
+   "Device selected: %O",
+   1
+  ],
+  [
+   "Device type details",
+   1
+  ],
+  [
+   "Device type notes",
+   1
+  ],
+  [
+   "display: none;",
+   1
+  ],
+  [
+   "DisplayPort",
+   1
+  ],
+  [
+   "Disposing panzoom",
+   1
+  ],
+  [
+   "DMX512 (XLR-5)",
+   1
+  ],
+  [
+   "Documentation",
+   1
+  ],
+  [
+   "Don't ask again",
+   1
+  ],
+  [
+   "Down",
+   1
+  ],
+  [
+   "Download Layout File",
+   1
+  ],
+  [
+   "Download QR",
+   1
+  ],
+  [
+   "DRackula - development environment",
+   1
+  ],
+  [
+   "Duplicate Rack",
+   1
+  ],
+  [
+   "E31837",
+   1
+  ],
+  [
+   "edge-grip-seam edge-grip-seam--left",
+   1
+  ],
+  [
+   "edge-grip-seam edge-grip-seam--right",
+   1
+  ],
+  [
+   "Edit YAML",
+   1
+  ],
+  [
+   "Editable mode",
+   1
+  ],
+  [
+   "element because Safari 18.x doesn't properly compute hit areas on transformed",
+   1
+  ],
+  [
+   "esc",
+   1
+  ],
+  [
+   "Export preview generation failed:",
+   1
+  ],
+  [
+   "Exports rack contents as a spreadsheet with device positions, names, models, and categories.",
+   1
+  ],
+  [
+   "Failed to apply YAML layout",
+   1
+  ],
+  [
+   "Failed to copy",
+   1
+  ],
+  [
+   "Failed to copy link",
+   1
+  ],
+  [
+   "Failed to copy YAML",
+   1
+  ],
+  [
+   "Failed to delete layout",
+   1
+  ],
+  [
+   "Failed to download layout",
+   1
+  ],
+  [
+   "Failed to generate QR code",
+   1
+  ],
+  [
+   "Failed to import device library: %O",
+   1
+  ],
+  [
+   "Failed to import devices",
+   1
+  ],
+  [
+   "Failed to load layouts",
+   1
+  ],
+  [
+   "Failed to load snapshots",
+   1
+  ],
+  [
+   "Failed to read file",
+   1
+  ],
+  [
+   "failed to reconcile saved layouts from server: %O",
+   1
+  ],
+  [
+   "Female",
+   1
+  ],
+  [
+   "field field-notes",
+   1
+  ],
+  [
+   "Field shown in annotation column (press N to toggle)",
+   1
+  ],
+  [
+   "field-input notes-input",
+   1
+  ],
+  [
+   "File corrupted",
+   1
+  ],
+  [
+   "Filename:",
+   1
+  ],
+  [
+   "Filter devices",
+   1
+  ],
+  [
+   "Finish the current open first",
+   1
+  ],
+  [
+   "Fit All",
+   1
+  ],
+  [
+   "Flip",
+   1
+  ],
+  [
+   "Flip face",
+   1
+  ],
+  [
+   "Focus",
+   1
+  ],
+  [
+   "Form Factor",
+   1
+  ],
+  [
+   "form-group rack-selection",
+   1
+  ],
+  [
+   "form-row form-row-symmetric",
+   1
+  ],
+  [
+   "Format",
+   1
+  ],
+  [
+   "Front & Rear (Side-by-Side)",
+   1
+  ],
+  [
+   "Front and rear images available",
+   1
+  ],
+  [
+   "Front image available",
+   1
+  ],
+  [
+   "Front Only",
+   1
+  ],
+  [
+   "Generating QR code...",
+   1
+  ],
+  [
+   "Group",
+   1
+  ],
+  [
+   "group-header group-toggle",
+   1
+  ],
+  [
+   "Grouping mode",
+   1
+  ],
+  [
+   "HDMI",
+   1
+  ],
+  [
+   "Height (U)",
+   1
+  ],
+  [
+   "Height:",
+   1
+  ],
+  [
+   "helper-text position-hint",
+   1
+  ],
+  [
+   "Hide devices that do not fit the active rack width.",
+   1
+  ],
+  [
+   "i * (rackWidth + bayGap)), );",
+   1
+  ],
+  [
+   "Identity",
+   1
+  ],
+  [
+   "Import",
+   1
+  ],
+  [
+   "Import from local file",
+   1
+  ],
+  [
+   "Import from local file (.zip)",
+   1
+  ],
+  [
+   "importNetBox",
+   1
+  ],
+  [
+   "info-row position-row",
+   1
+  ],
+  [
+   "info-value position-value",
+   1
+  ],
+  [
+   "info-value user-agent",
+   1
+  ],
+  [
+   "Input",
+   1
+  ],
+  [
+   "input:not([type='hidden']):not(:disabled), select:not(:disabled), textarea:not(:disabled)",
+   1
+  ],
+  [
+   "Inside Container",
+   1
+  ],
+  [
+   "instead of",
+   1
+  ],
+  [
+   "Interfaces:",
+   1
+  ],
+  [
+   "Invalid share link",
+   1
+  ],
+  [
+   "Invalid username or password.",
+   1
+  ],
+  [
+   "Invalid YAML layout schema.",
+   1
+  ],
+  [
+   "IP",
+   1
+  ],
+  [
+   "IP Address",
+   1
+  ],
+  [
+   "IP Address/Hostname",
+   1
+  ],
+  [
+   "JPEG",
+   1
+  ],
+  [
+   "Keep All",
+   1
+  ],
+  [
+   "Keep server copy",
+   1
+  ],
+  [
+   "Last exported",
+   1
+  ],
+  [
+   "last reached",
+   1
+  ],
+  [
+   "Last reached server",
+   1
+  ],
+  [
+   "layered sheet",
+   1
+  ],
+  [
+   "Layout changed while this editor was open.",
+   1
+  ],
+  [
+   "Layout file downloaded",
+   1
+  ],
+  [
+   "Light",
+   1
+  ],
+  [
+   "Link copied to clipboard",
+   1
+  ],
+  [
+   "Loading saved layouts...",
+   1
+  ],
+  [
+   "Loading snapshots...",
+   1
+  ],
+  [
+   "loadLayouts: failed %O",
+   1
+  ],
+  [
+   "LOCAL -",
+   1
+  ],
+  [
+   "Lock the layout for viewing",
+   1
+  ],
+  [
+   "M 384 128 C 320 128 277.333 85.333 277.333 85.333 L 341.333 85.333 L 384 128 L 384 128 Z",
+   1
+  ],
+  [
+   "M 853.333 896 L 874.667 853.333 L 896 853.333 L 896 896 L 853.333 917.333 L 853.333 896 Z",
+   1
+  ],
+  [
+   "M10 12H18M18 12L15 9M18 12L15 15",
+   1
+  ],
+  [
+   "M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z",
+   1
+  ],
+  [
+   "M12 16.01L12.01 15.9989",
+   1
+  ],
+  [
+   "M12 16V4M12 4L15.5 7.5M12 4L8.5 7.5",
+   1
+  ],
+  [
+   "m12 17.01l.01-.011",
+   1
+  ],
+  [
+   "M12 17v5",
+   1
+  ],
+  [
+   "M14 65 L36 15 L44 15 L66 65 Z",
+   1
+  ],
+  [
+   "M15 6L9 12L15 18",
+   1
+  ],
+  [
+   "M15 9V4.6C15 4.26863 14.7314 4 14.4 4H4.6C4.26863 4 4 4.26863 4 4.6V14.4C4 14.7314 4.26863 15 4.6 15H9",
+   1
+  ],
+  [
+   "M16 3H18C20.2091 3 22 4.79086 22 7V17C22 19.2091 20.2091 21 18 21H16",
+   1
+  ],
+  [
+   "M18 65 L37 18 L43 18 L62 65 Z",
+   1
+  ],
+  [
+   "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+   1
+  ],
+  [
+   "M192,232a12,12,0,0,1-12,12H76a12,12,0,0,1,0-24H180A12,12,0,0,1,192,232Z",
+   1
+  ],
+  [
+   "M2 18V6C2 4.34315 3.34315 3 5 3H7C8.65685 3 10 4.34315 10 6V18C10 19.6569 8.65685 21 7 21H5C3.34315 21 2 19.6569 2 18Z",
+   1
+  ],
+  [
+   "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32Z",
+   1
+  ],
+  [
+   "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32Zm0,176H48V48H208V208Z",
+   1
+  ],
+  [
+   "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4",
+   1
+  ],
+  [
+   "M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13",
+   1
+  ],
+  [
+   "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z",
+   1
+  ],
+  [
+   "M232,200a12,12,0,0,1-12,12H36a12,12,0,0,1,0-24H220A12,12,0,0,1,232,200Z",
+   1
+  ],
+  [
+   "M3 20.29V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7.961a2 2 0 0 0-1.561.75l-2.331 2.914A.6.6 0 0 1 3 20.29Z",
+   1
+  ],
+  [
+   "M3 7v6h6",
+   1
+  ],
+  [
+   "M6 15L12 9L18 15",
+   1
+  ],
+  [
+   "M6 20L18 20",
+   1
+  ],
+  [
+   "M6 26 L14 6 L18 6 L26 26 Z",
+   1
+  ],
+  [
+   "M6 9L12 15L18 9",
+   1
+  ],
+  [
+   "M6.75827 17.2426L12.0009 12M17.2435 6.75736L12.0009 12M12.0009 12L6.75827 6.75736M12.0009 12L17.2435 17.2426",
+   1
+  ],
+  [
+   "M7 12h10M7 8h6",
+   1
+  ],
+  [
+   "M8 26 L14.5 7 L17.5 7 L24 26 Z",
+   1
+  ],
+  [
+   "M9 20.027c-3 .973-5.5 0-7-3",
+   1
+  ],
+  [
+   "M9 6L15 12L9 18",
+   1
+  ],
+  [
+   "Made in Canada 🇨🇦 with ❤️",
+   1
+  ],
+  [
+   "Male",
+   1
+  ],
+  [
+   "Management",
+   1
+  ],
+  [
+   "Management Only",
+   1
+  ],
+  [
+   "menu-label starter-text",
+   1
+  ],
+  [
+   "message hint",
+   1
+  ],
+  [
+   "MIDI (5-pin DIN)",
+   1
+  ],
+  [
+   "mobile redo applied",
+   1
+  ],
+  [
+   "mobile redo requested",
+   1
+  ],
+  [
+   "mobile redo skipped: canRedo=false",
+   1
+  ],
+  [
+   "mobile redo skipped: redo() returned false",
+   1
+  ],
+  [
+   "mobile undo applied",
+   1
+  ],
+  [
+   "mobile undo requested",
+   1
+  ],
+  [
+   "mobile undo skipped: canUndo=false",
+   1
+  ],
+  [
+   "mobile undo skipped: undo() returned false",
+   1
+  ],
+  [
+   "Monaco",
+   1
+  ],
+  [
+   "Mounted Face",
+   1
+  ],
+  [
+   "Move",
+   1
+  ],
+  [
+   "Move Down",
+   1
+  ],
+  [
+   "Move rack left",
+   1
+  ],
+  [
+   "Move rack right",
+   1
+  ],
+  [
+   "Move Up",
+   1
+  ],
+  [
+   "Name is required",
+   1
+  ],
+  [
+   "navigate",
+   1
+  ],
+  [
+   "Never saved",
+   1
+  ],
+  [
+   "New rack",
+   1
+  ],
+  [
+   "No device type image",
+   1
+  ],
+  [
+   "No devices in library",
+   1
+  ],
+  [
+   "No devices match",
+   1
+  ],
+  [
+   "No image",
+   1
+  ],
+  [
+   "No layouts saved on server yet.",
+   1
+  ],
+  [
+   "No matching commands",
+   1
+  ],
+  [
+   "No matching devices",
+   1
+  ],
+  [
+   "No prompts are dismissed.",
+   1
+  ],
+  [
+   "No rack selected",
+   1
+  ],
+  [
+   "No racks configured",
+   1
+  ],
+  [
+   "No racks yet",
+   1
+  ],
+  [
+   "No racks yet. Add one to get started.",
+   1
+  ],
+  [
+   "no saved layouts",
+   1
+  ],
+  [
+   "No saved layouts",
+   1
+  ],
+  [
+   "No snapshots for this layout.",
+   1
+  ],
+  [
+   "No unused custom device types right now.",
+   1
+  ],
+  [
+   "No unused device types found.",
+   1
+  ],
+  [
+   "Not exported",
+   1
+  ],
+  [
+   "Not saved to the server",
+   1
+  ],
+  [
+   "Not yet saved",
+   1
+  ],
+  [
+   "Note:",
+   1
+  ],
+  [
+   "Notes (optional)",
+   1
+  ],
+  [
+   "nothing rear-facing here",
+   1
+  ],
+  [
+   "Occupies both front and rear rack faces",
+   1
+  ],
+  [
+   "Occupies left or right half of rack width",
+   1
+  ],
+  [
+   "Offer to remove unused custom device types before saving or exporting.",
+   1
+  ],
+  [
+   "Open",
+   1
+  ],
+  [
+   "Open frame",
+   1
+  ],
+  [
+   "Open in another tab",
+   1
+  ],
+  [
+   "Open the Devices tab on the left and drag devices into your rack.",
+   1
+  ],
+  [
+   "Open the Devices tab, tap a device to arm it, then tap a rack slot to place it.",
+   1
+  ],
+  [
+   "Opening bottom sheet for device %d",
+   1
+  ],
+  [
+   "or",
+   1
+  ],
+  [
+   "Outlets",
+   1
+  ],
+  [
+   "Output",
+   1
+  ],
+  [
+   "overflow: visible",
+   1
+  ],
+  [
+   "Override set",
+   1
+  ],
+  [
+   "Parse Different YAML",
+   1
+  ],
+  [
+   "Parse YAML",
+   1
+  ],
+  [
+   "Parsing...",
+   1
+  ],
+  [
+   "Part Number",
+   1
+  ],
+  [
+   "Party Mode disabled (reduced motion preference)",
+   1
+  ],
+  [
+   "Party Mode!",
+   1
+  ],
+  [
+   "Password",
+   1
+  ],
+  [
+   "Paste YAML",
+   1
+  ],
+  [
+   "PDF",
+   1
+  ],
+  [
+   "persistence initialization failed; continuing without server persistence: %O",
+   1
+  ],
+  [
+   "Phoenix/Euroblock",
+   1
+  ],
+  [
+   "Pin device",
+   1
+  ],
+  [
+   "Pin to top",
+   1
+  ],
+  [
+   "Pinned",
+   1
+  ],
+  [
+   "Placement",
+   1
+  ],
+  [
+   "Placing",
+   1
+  ],
+  [
+   "Placing:",
+   1
+  ],
+  [
+   "Please enter YAML content",
+   1
+  ],
+  [
+   "Please select a .yaml or .yml file",
+   1
+  ],
+  [
+   "PNG",
+   1
+  ],
+  [
+   "PoE Powered",
+   1
+  ],
+  [
+   "PoE Source",
+   1
+  ],
+  [
+   "port-tooltip-badge mgmt",
+   1
+  ],
+  [
+   "port-tooltip-badge poe",
+   1
+  ],
+  [
+   "position: absolute; pointer-events: none;",
+   1
+  ],
+  [
+   "POST",
+   1
+  ],
+  [
+   "Preview generation failed",
+   1
+  ],
+  [
+   "previously focused element",
+   1
+  ],
+  [
+   "Project",
+   1
+  ],
+  [
+   "QR Code",
+   1
+  ],
+  [
+   "QR generation failed:",
+   1
+  ],
+  [
+   "r.id === layoutStore.activeRackId, ); return idx",
+   1
+  ],
+  [
+   "Rack actions",
+   1
+  ],
+  [
+   "Rack Width",
+   1
+  ],
+  [
+   "Rack Width Compatibility",
+   1
+  ],
+  [
+   "rack.notes ?? \"\")); let resizeError = $state",
+   1
+  ],
+  [
+   "Rackula_onboarding_hint_dismissed",
+   1
+  ],
+  [
+   "Rackula:server-hint-dismissed",
+   1
+  ],
+  [
+   "Read-only mode",
+   1
+  ],
+  [
+   "Rear image available",
+   1
+  ],
+  [
+   "Rear Only",
+   1
+  ],
+  [
+   "Rear View",
+   1
+  ],
+  [
+   "Recent",
+   1
+  ],
+  [
+   "reconciliation: %d image(s) failed to read: %o",
+   1
+  ],
+  [
+   "rect.right || y",
+   1
+  ],
+  [
+   "Redo:",
+   1
+  ],
+  [
+   "registerRestoreFromFileTrigger(startRestore));",
+   1
+  ],
+  [
+   "Reload",
+   1
+  ],
+  [
+   "Reload latest",
+   1
+  ],
+  [
+   "Remove from Rack",
+   1
+  ],
+  [
+   "Replace server copy",
+   1
+  ],
+  [
+   "Report Bug",
+   1
+  ],
+  [
+   "Reset",
+   1
+  ],
+  [
+   "Reset dismissed prompts",
+   1
+  ],
+  [
+   "Reset to default",
+   1
+  ],
+  [
+   "Reset zoom",
+   1
+  ],
+  [
+   "Reset Zoom",
+   1
+  ],
+  [
+   "Restore",
+   1
+  ],
+  [
+   "Restoring...",
+   1
+  ],
+  [
+   "Review",
+   1
+  ],
+  [
+   "Review & Clean Up",
+   1
+  ],
+  [
+   "Review & Clean Up opens a checklist where you can choose which unused types to delete first.",
+   1
+  ],
+  [
+   "RS-232",
+   1
+  ],
+  [
+   "RS-422",
+   1
+  ],
+  [
+   "run",
+   1
+  ],
+  [
+   "ry=",
+   1
+  ],
+  [
+   "Save all layouts",
+   1
+  ],
+  [
+   "Save As",
+   1
+  ],
+  [
+   "Save to file",
+   1
+  ],
+  [
+   "Save to server",
+   1
+  ],
+  [
+   "Saved on Server",
+   1
+  ],
+  [
+   "Scan to open in",
+   1
+  ],
+  [
+   "SDI (BNC)",
+   1
+  ],
+  [
+   "Search or jump to...",
+   1
+  ],
+  [
+   "Select a rack or device to edit its properties.",
+   1
+  ],
+  [
+   "Selection",
+   1
+  ],
+  [
+   "Serial Number",
+   1
+  ],
+  [
+   "Set by device depth. To mount on a single face, change the device type to half-depth.",
+   1
+  ],
+  [
+   "Set override",
+   1
+  ],
+  [
+   "SF Mono",
+   1
+  ],
+  [
+   "Share Ideas",
+   1
+  ],
+  [
+   "Share Link",
+   1
+  ],
+  [
+   "Shared layout loaded",
+   1
+  ],
+  [
+   "Shared layouts include rack configuration and device placements. Device images are not included.",
+   1
+  ],
+  [
+   "Show a banana beside racks for a sense of size.",
+   1
+  ],
+  [
+   "Show the annotation column beside each rack.",
+   1
+  ],
+  [
+   "Show the controls for baying racks together. Existing bays stay put when off.",
+   1
+  ],
+  [
+   "Sign in to continue",
+   1
+  ],
+  [
+   "Skip to canvas",
+   1
+  ],
+  [
+   "Slot",
+   1
+  ],
+  [
+   "slot-status slot-status-muted",
+   1
+  ],
+  [
+   "Slug:",
+   1
+  ],
+  [
+   "snapshots-status empty",
+   1
+  ],
+  [
+   "snapshots-status error",
+   1
+  ],
+  [
+   "Space Grotesk",
+   1
+  ],
+  [
+   "Speakon",
+   1
+  ],
+  [
+   "status-box empty",
+   1
+  ],
+  [
+   "status-box error",
+   1
+  ],
+  [
+   "Stay in browser mode",
+   1
+  ],
+  [
+   "Stored in this browser only",
+   1
+  ],
+  [
+   "Stored on the server",
+   1
+  ],
+  [
+   "SVG",
+   1
+  ],
+  [
+   "swap this face for the other one",
+   1
+  ],
+  [
+   "Switch back to browser mode",
+   1
+  ],
+  [
+   "Switch to server mode",
+   1
+  ],
+  [
+   "syncing from layout, runId=%d",
+   1
+  ],
+  [
+   "Tags",
+   1
+  ],
+  [
+   "Tap a slot to place.",
+   1
+  ],
+  [
+   "testid=",
+   1
+  ],
+  [
+   "The clean-up prompt is currently dismissed.",
+   1
+  ],
+  [
+   "Theme",
+   1
+  ],
+  [
+   "This deployment now stores layouts in your browser; your previous server library is not loaded here.",
+   1
+  ],
+  [
+   "This deployment now stores layouts on the server. Upload your local copy to keep it here.",
+   1
+  ],
+  [
+   "This layout has changes that are not in any exported file. Restoring replaces it with the file you choose.",
+   1
+  ],
+  [
+   "This layout has no racks yet.",
+   1
+  ],
+  [
+   "This layout has not been saved to the server.",
+   1
+  ],
+  [
+   "This layout is open in another tab. Edits here are paused to avoid overwriting it. Reload to continue editing.",
+   1
+  ],
+  [
+   "This will remove the device from your library.",
+   1
+  ],
+  [
+   "thumb thumb-empty",
+   1
+  ],
+  [
+   "To make server mode the default for everyone, set RACKULA_STORAGE_MODE=server.",
+   1
+  ],
+  [
+   "toggleSnapshots: failed %O",
+   1
+  ],
+  [
+   "Too many login attempts. Please wait a moment and try again.",
+   1
+  ],
+  [
+   "toolbar-section toolbar-layout-name",
+   1
+  ],
+  [
+   "toolbar-section toolbar-left",
+   1
+  ],
+  [
+   "toolbar-section toolbar-right",
+   1
+  ],
+  [
+   "toolbar-section toolbar-right toolbar-right-mobile",
+   1
+  ],
+  [
+   "toolbar-section toolbar-tabs",
+   1
+  ],
+  [
+   "transform: rotate(19deg)",
+   1
+  ],
+  [
+   "Try changing export options",
+   1
+  ],
+  [
+   "Try removing some devices to reduce size",
+   1
+  ],
+  [
+   "Type",
+   1
+  ],
+  [
+   "Unable to encode layout",
+   1
+  ],
+  [
+   "Unable to reach the server. Please check your connection.",
+   1
+  ],
+  [
+   "Undo All",
+   1
+  ],
+  [
+   "Undo:",
+   1
+  ],
+  [
+   "Universal",
+   1
+  ],
+  [
+   "Unpin device",
+   1
+  ],
+  [
+   "Unpin from top",
+   1
+  ],
+  [
+   "Untitled",
+   1
+  ],
+  [
+   "Untitled Rack",
+   1
+  ],
+  [
+   "Up",
+   1
+  ],
+  [
+   "Upload",
+   1
+  ],
+  [
+   "Upload and switch",
+   1
+  ],
+  [
+   "Upload and switch?",
+   1
+  ],
+  [
+   "Upload File",
+   1
+  ],
+  [
+   "Uploading...",
+   1
+  ],
+  [
+   "Use ↑↓ keys to move device",
+   1
+  ],
+  [
+   "Username",
+   1
+  ],
+  [
+   "userSpaceOnUse",
+   1
+  ],
+  [
+   "Using device type image",
+   1
+  ],
+  [
+   "VA Rating",
+   1
+  ],
+  [
+   "Validating YAML...",
+   1
+  ],
+  [
+   "Version",
+   1
+  ],
+  [
+   "void | Promise",
+   1
+  ],
+  [
+   "void; /** Called when user clicks delete button for unused custom device */ ondelete?: (event: CustomEvent",
+   1
+  ],
+  [
+   "void; /** Called when user pins or unpins the device */ ontogglefavourite?: (event: CustomEvent",
+   1
+  ],
+  [
+   "void; /** Context menu event with coordinates and device info */ oncontextmenuopen?: ( event: CustomEvent",
+   1
+  ],
+  [
+   "void; /** Mobile long press for rack editing */ onracklongpress?: (event: CustomEvent",
+   1
+  ],
+  [
+   "void; ondragstart?: ( event: CustomEvent",
+   1
+  ],
+  [
+   "void; onduplicate?: ( event: CustomEvent",
+   1
+  ],
+  [
+   "void; onplacementtap?: ( event: CustomEvent",
+   1
+  ],
+  [
+   "void; onracklongpress?: (event: CustomEvent",
+   1
+  ],
+  [
+   "void; onrackselect?: (event: CustomEvent",
+   1
+  ],
+  [
+   "Wall mount",
+   1
+  ],
+  [
+   "Which rack sizes this device fits",
+   1
+  ],
+  [
+   "XLR-5",
+   1
+  ],
+  [
+   "xMidYMid slice",
+   1
+  ],
+  [
+   "YAML applied",
+   1
+  ],
+  [
+   "YAML cannot be empty.",
+   1
+  ],
+  [
+   "YAML copied to clipboard",
+   1
+  ],
+  [
+   "YAML is valid.",
+   1
+  ],
+  [
+   "your layout",
+   1
+  ],
+  [
+   "Your layouts are saving to this browser only. Switch to server mode to save them on the server.",
+   1
+  ],
+  [
+   "Your most recent edits may not be saved.",
+   1
+  ],
+  [
+   "Zoom",
+   1
+  ]
+ ]
+}

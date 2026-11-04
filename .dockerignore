@@ -1,0 +1,46 @@
+# Dependencies (will be installed fresh in container)
+node_modules
+
+# Build output (will be rebuilt in container)
+dist
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Test files
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+coverage
+playwright-report
+test-results
+
+# Documentation (keep README for reference)
+docs
+
+# Development files
+.env.local
+.env.development
+.husky
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Claude
+.claude
+
+# Local worktree snapshots
+.worktree
+.worktrees
